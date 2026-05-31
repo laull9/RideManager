@@ -52,8 +52,8 @@ public static class ConfigLoader
             },
             new ModelOptions(ModelBackend.Onnx, "models"),
             new SensorOptions(
-                new SensorEndpointOptions(true, "bluetooth", "00:00:00:00:00:00"),
-                new SensorEndpointOptions(false, "serial", "/dev/ttyS0")),
+                CreateDefaultRadarEndpoint(),
+                new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0)),
             new ActuatorOptions(new ActuatorEndpointOptions(false), new ActuatorEndpointOptions(false)),
             new DatabaseOptions(string.Empty));
     }
@@ -81,7 +81,41 @@ public static class ConfigLoader
     /// </summary>
     private static SensorEndpointOptions ParseEndpoint(SensorEndpointToml value)
     {
-        return new SensorEndpointOptions(value.Enabled, value.Transport, value.Address);
+        return new SensorEndpointOptions(
+            value.Enabled,
+            value.Transport,
+            value.Address,
+            value.DeviceName,
+            value.ServiceUuid,
+            value.NotifyUuid,
+            value.ConfigUuid,
+            value.HealthUuid,
+            value.MatchByService,
+            value.SubscribeHealth,
+            value.ScanTimeoutSeconds,
+            value.ServicesTimeoutSeconds,
+            value.ReconnectDelaySeconds);
+    }
+
+    /// <summary>
+    /// 创建雷达端点默认配置。
+    /// </summary>
+    private static SensorEndpointOptions CreateDefaultRadarEndpoint()
+    {
+        return new SensorEndpointOptions(
+            true,
+            "bluetooth",
+            string.Empty,
+            "EVADAR-C6",
+            "0000ad01-0000-1000-8000-00805f9b34fb",
+            "0000ad02-0000-1000-8000-00805f9b34fb",
+            "0000ad03-0000-1000-8000-00805f9b34fb",
+            "0000ad04-0000-1000-8000-00805f9b34fb",
+            true,
+            true,
+            12.0,
+            10.0,
+            2.0);
     }
 
     /// <summary>
@@ -198,6 +232,26 @@ public static class ConfigLoader
         public string Transport { get; set; } = string.Empty;
 
         public string Address { get; set; } = string.Empty;
+
+        public string DeviceName { get; set; } = string.Empty;
+
+        public string ServiceUuid { get; set; } = string.Empty;
+
+        public string NotifyUuid { get; set; } = string.Empty;
+
+        public string ConfigUuid { get; set; } = string.Empty;
+
+        public string HealthUuid { get; set; } = string.Empty;
+
+        public bool MatchByService { get; set; }
+
+        public bool SubscribeHealth { get; set; } = true;
+
+        public double ScanTimeoutSeconds { get; set; } = 12.0;
+
+        public double ServicesTimeoutSeconds { get; set; } = 10.0;
+
+        public double ReconnectDelaySeconds { get; set; } = 2.0;
     }
 
     /// <summary>

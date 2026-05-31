@@ -41,7 +41,20 @@ public sealed record SensorOptions(SensorEndpointOptions Radar, SensorEndpointOp
 /// <summary>
 /// 表示单个传感器通讯端点的配置。
 /// </summary>
-public sealed record SensorEndpointOptions(bool Enabled, string Transport, string Address);
+public sealed record SensorEndpointOptions(
+    bool Enabled,
+    string Transport,
+    string Address,
+    string DeviceName,
+    string ServiceUuid,
+    string NotifyUuid,
+    string ConfigUuid,
+    string HealthUuid,
+    bool MatchByService,
+    bool SubscribeHealth,
+    double ScanTimeoutSeconds,
+    double ServicesTimeoutSeconds,
+    double ReconnectDelaySeconds);
 
 /// <summary>
 /// 表示所有执行器的配置。

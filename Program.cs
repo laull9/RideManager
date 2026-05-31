@@ -8,6 +8,19 @@ using RideManager.Utils;
 
 var configPath = ReadOption(args, "--config") ?? "config.toml";
 var options = ConfigLoader.Load(configPath);
+
+if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
+{
+    var liveOptions = new RadarLiveTestOptions(
+        ParseDuration(ReadOption(args, "--duration")),
+        args.Contains("--headless", StringComparer.OrdinalIgnoreCase),
+        args.Contains("--simulate", StringComparer.OrdinalIgnoreCase),
+        ParsePort(ReadOption(args, "--port"), 5089));
+
+    await new RadarLiveTester(options.Sensors.Radar).RunAsync(liveOptions, CancellationToken.None);
+    return;
+}
+
 var runtimeSelector = new ModelRuntimeSelector(options.Models);
 var cameraPipelines = CameraPipelineFactory.CreateThreeCameraPipelines(options.Cameras, runtimeSelector);
 await using var cameraDisposer = new AsyncPipelineDisposer(cameraPipelines);
@@ -23,9 +36,10 @@ if (args.Contains("livetest", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+await using var radarReader = new RadarBluetoothReader(options.Sensors.Radar);
 var sensorReaders = new ISensorReader[]
 {
-    new RadarBluetoothReader(options.Sensors.Radar),
+    radarReader,
     new GyroSensorReader(options.Sensors.Gyro)
 };
 
@@ -87,6 +101,21 @@ static TimeSpan? ParseDuration(string? value)
     return double.TryParse(value, out var seconds) && seconds > 0
         ? TimeSpan.FromSeconds(seconds)
         : throw new ArgumentException($"Invalid duration seconds: {value}");
+}
+
+/// <summary>
+/// 解析本地 Web 服务端口。
+/// </summary>
+static int ParsePort(string? value, int defaultPort)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return defaultPort;
+    }
+
+    return int.TryParse(value, out var port) && port is > 0 and < 65536
+        ? port
+        : throw new ArgumentException($"Invalid port: {value}");
 }
 
 /// <summary>
