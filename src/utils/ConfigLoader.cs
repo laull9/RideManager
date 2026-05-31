@@ -46,9 +46,9 @@ public static class ConfigLoader
         return new RideManagerOptions(
             new[]
             {
-                new CameraOptions(CameraId.CamFront, true, "/dev/video0", "front-road.onnx", 1280, 720, 30),
-                new CameraOptions(CameraId.CamFace, true, "/dev/video1", "face-fatigue.onnx", 640, 480, 30),
-                new CameraOptions(CameraId.CamBack, true, "/dev/video2", "back-fisheye.onnx", 1280, 720, 30)
+                new CameraOptions(CameraId.CamFront, true, "/dev/video0", "yolo26n.onnx", 1280, 720, 640, 640, 30, 0.35),
+                new CameraOptions(CameraId.CamFace, true, "/dev/video1", "face-fatigue.onnx", 640, 480, 640, 480, 30, 0.5),
+                new CameraOptions(CameraId.CamBack, true, "/dev/video2", "yolo26n.onnx", 1280, 720, 640, 640, 30, 0.35)
             },
             new ModelOptions(ModelBackend.Onnx, "models"),
             new SensorOptions(
@@ -70,7 +70,10 @@ public static class ConfigLoader
             value.Model,
             value.Width,
             value.Height,
-            value.Fps);
+            value.InputWidth,
+            value.InputHeight,
+            value.Fps,
+            Math.Clamp(value.ConfidenceThreshold, 0.0, 1.0));
     }
 
     /// <summary>
@@ -166,7 +169,13 @@ public static class ConfigLoader
 
         public int Height { get; set; } = 720;
 
+        public int InputWidth { get; set; } = 640;
+
+        public int InputHeight { get; set; } = 640;
+
         public int Fps { get; set; } = 30;
+
+        public double ConfidenceThreshold { get; set; } = 0.25;
     }
 
     /// <summary>

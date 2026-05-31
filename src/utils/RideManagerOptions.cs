@@ -23,7 +23,10 @@ public sealed record CameraOptions(
     string ModelName,
     int Width,
     int Height,
-    int Fps);
+    int InputWidth,
+    int InputHeight,
+    int Fps,
+    double ConfidenceThreshold);
 
 /// <summary>
 /// 表示推理运行时的配置。

@@ -36,12 +36,44 @@ public static class CameraPipelineFactory
     /// </summary>
     private static CameraPipeline CreatePipeline(CameraOptions options, ModelRuntimeSelector runtimeSelector)
     {
-        var inferenceEngine = runtimeSelector.Create(options.ModelName);
+        var inferenceEngine = runtimeSelector.Create(options.ModelName, options.ConfidenceThreshold);
         return new CameraPipeline(
             options.Id,
-            new SimulatedCameraSource(options),
-            new OpenCvFramePreprocessor(options.Id),
+            CreateCameraSource(options),
+            new OpenCvFramePreprocessor(options),
             new CameraAnalyzer(options.Id, inferenceEngine));
+    }
+
+    /// <summary>
+    /// 创建真实摄像头源；配置为 synthetic 或真实设备不可用时回退到合成源。
+    /// </summary>
+    private static ICameraSource CreateCameraSource(CameraOptions options)
+    {
+        if (IsSyntheticDevice(options.Device))
+        {
+            return new SimulatedCameraSource(options);
+        }
+
+        try
+        {
+            return new OpenCvCameraSource(options);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or OpenCvSharp.OpenCVException)
+        {
+            Console.WriteLine($"Camera {options.Id} fallback to synthetic source: {ex.Message}");
+            return new SimulatedCameraSource(options);
+        }
+    }
+
+    /// <summary>
+    /// 判断摄像头配置是否显式要求使用合成源。
+    /// </summary>
+    private static bool IsSyntheticDevice(string device)
+    {
+        return device.Equals("synthetic", StringComparison.OrdinalIgnoreCase)
+            || device.Equals("simulated", StringComparison.OrdinalIgnoreCase)
+            || device.StartsWith("synthetic://", StringComparison.OrdinalIgnoreCase)
+            || device.StartsWith("simulated://", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

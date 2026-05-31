@@ -1,25 +1,505 @@
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+using System.Text.RegularExpressions;
+
 namespace RideManager.Models;
 
 /// <summary>
-/// 提供 ONNX Runtime 推理占位实现。
+/// 提供 ONNX Runtime 推理实现。
 /// </summary>
-public sealed class OnnxInferenceEngine : IInferenceEngine
+public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
 {
+    private const double NmsIouThreshold = 0.45;
+    private const int MaxDetections = 50;
+    private static readonly Regex NamesMetadataRegex = new("(\\d+)\\s*:\\s*['\"]([^'\"]+)['\"]", RegexOptions.Compiled);
+    private static readonly string[] CocoLabels =
+    {
+        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+        "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+        "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra",
+        "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+        "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+        "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
+        "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+        "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+        "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+        "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
+        "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
+        "hair drier", "toothbrush"
+    };
     private readonly string _modelPath;
+    private readonly double _confidenceThreshold;
+    private readonly object _gate = new();
+    private InferenceSession? _session;
+    private string[] _labels = CocoLabels;
+    private string? _loadError;
 
     /// <summary>
     /// 创建 ONNX 推理引擎。
     /// </summary>
-    public OnnxInferenceEngine(string modelPath)
+    public OnnxInferenceEngine(string modelPath, double confidenceThreshold)
     {
         _modelPath = modelPath;
+        _confidenceThreshold = Math.Clamp(confidenceThreshold, 0.0, 1.0);
     }
 
     /// <summary>
-    /// 返回占位推理结果，后续接入 Microsoft.ML.OnnxRuntime。
+    /// 使用 ONNX Runtime 运行一次推理，模型缺失时返回可诊断结果。
     /// </summary>
     public Task<InferenceOutput> RunAsync(InferenceInput input, CancellationToken cancellationToken)
     {
-        return Task.FromResult(new InferenceOutput(new[] { $"onnx:{Path.GetFileName(_modelPath)}" }, 0.0));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var session = GetSession();
+        if (session is null)
+        {
+            var reason = File.Exists(_modelPath) ? _loadError ?? "load_failed" : "model_missing";
+            return Task.FromResult(new InferenceOutput(new[] { $"onnx:{Path.GetFileName(_modelPath)}:{reason}" }, 0.0));
+        }
+
+        var inputName = session.InputMetadata.Keys.First();
+        var tensor = new DenseTensor<float>(input.TensorData.ToArray(), input.TensorDimensions.ToArray());
+        var values = new List<NamedOnnxValue>
+        {
+            NamedOnnxValue.CreateFromTensor(inputName, tensor)
+        };
+        using var results = session.Run(values);
+
+        return Task.FromResult(ParseOutput(results, input));
+    }
+
+    /// <summary>
+    /// 释放 ONNX Runtime 会话。
+    /// </summary>
+    public void Dispose()
+    {
+        _session?.Dispose();
+    }
+
+    /// <summary>
+    /// 懒加载 ONNX 会话。
+    /// </summary>
+    private InferenceSession? GetSession()
+    {
+        if (_session is not null || _loadError is not null || !File.Exists(_modelPath))
+        {
+            return _session;
+        }
+
+        lock (_gate)
+        {
+            if (_session is not null || _loadError is not null)
+            {
+                return _session;
+            }
+
+            try
+            {
+                var sessionOptions = new SessionOptions
+                {
+                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
+                    ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                    InterOpNumThreads = 1,
+                    IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 4)
+                };
+                _session = new InferenceSession(_modelPath, sessionOptions);
+                _labels = GetLabels(_session);
+            }
+            catch (Exception ex) when (ex is OnnxRuntimeException or DllNotFoundException or BadImageFormatException)
+            {
+                _loadError = ex.GetType().Name;
+            }
+
+            return _session;
+        }
+    }
+
+    /// <summary>
+    /// 从通用数值输出中提取最高置信度，作为 live 链路的基础后处理。
+    /// </summary>
+    private InferenceOutput ParseOutput(
+        IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results,
+        InferenceInput input)
+    {
+        var best = 0.0;
+        var outputName = "output";
+        var detections = new List<InferenceDetection>();
+        var recognizedDetectionOutput = false;
+
+        foreach (var result in results)
+        {
+            if (result.Value is not Tensor<float> tensor)
+            {
+                continue;
+            }
+
+            var values = tensor.ToArray();
+            if (values.Length == 0)
+            {
+                continue;
+            }
+
+            var decodedPostProcessed = TryParsePostProcessedDetections(tensor, values, input);
+            if (decodedPostProcessed is not null)
+            {
+                recognizedDetectionOutput = true;
+                detections.AddRange(decodedPostProcessed);
+            }
+            else
+            {
+                detections.AddRange(ParseYoloDetections(tensor, values, input));
+            }
+
+            var max = values.Max();
+            if (max > best)
+            {
+                best = max;
+                outputName = result.Name;
+            }
+        }
+
+        if (detections.Count > 0)
+        {
+            var selected = ApplyNms(detections)
+                .Take(MaxDetections)
+                .ToArray();
+            return new InferenceOutput(
+                selected.Select(detection => detection.Label).ToArray(),
+                selected.Max(detection => detection.Confidence),
+                selected);
+        }
+
+        if (recognizedDetectionOutput)
+        {
+            return new InferenceOutput(Array.Empty<string>(), 0.0, Array.Empty<InferenceDetection>());
+        }
+
+        return new InferenceOutput(new[] { $"onnx:{outputName}" }, Math.Clamp(best, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 解析已在模型内完成后处理的 YOLO 输出：[1, N, 6]，每行 x1,y1,x2,y2,confidence,classId。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection>? TryParsePostProcessedDetections(
+        Tensor<float> tensor,
+        float[] values,
+        InferenceInput input)
+    {
+        var dims = tensor.Dimensions.ToArray();
+        if (dims.Length == 2 && dims[1] == 6)
+        {
+            return ParsePostProcessedRows(values, dims[0], false, input);
+        }
+
+        if (dims.Length != 3 || dims[0] != 1)
+        {
+            return null;
+        }
+
+        if (dims[2] == 6)
+        {
+            return ParsePostProcessedRows(values, dims[1], false, input);
+        }
+
+        return dims[1] == 6
+            ? ParsePostProcessedRows(values, dims[2], true, input)
+            : null;
+    }
+
+    /// <summary>
+    /// 解析后处理输出行，并把 letterbox 输入坐标还原为原图归一化坐标。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection> ParsePostProcessedRows(
+        float[] values,
+        int rows,
+        bool transposed,
+        InferenceInput input)
+    {
+        var detections = new List<InferenceDetection>();
+        for (var row = 0; row < rows; row++)
+        {
+            var confidence = ReadPostProcessedValue(values, rows, row, 4, transposed);
+            if (confidence < _confidenceThreshold)
+            {
+                continue;
+            }
+
+            var classId = Math.Max(0, (int)ReadPostProcessedValue(values, rows, row, 5, transposed));
+            var x1 = ReadPostProcessedValue(values, rows, row, 0, transposed);
+            var y1 = ReadPostProcessedValue(values, rows, row, 1, transposed);
+            var x2 = ReadPostProcessedValue(values, rows, row, 2, transposed);
+            var y2 = ReadPostProcessedValue(values, rows, row, 3, transposed);
+            var box = NormalizeLetterboxedBox(x1, y1, x2, y2, input);
+            if (box.Width <= 0 || box.Height <= 0)
+            {
+                continue;
+            }
+
+            detections.Add(new InferenceDetection(
+                ResolveLabel(classId),
+                confidence,
+                box.X,
+                box.Y,
+                box.Width,
+                box.Height));
+        }
+
+        return detections;
+    }
+
+    /// <summary>
+    /// 读取后处理输出中的单个属性值。
+    /// </summary>
+    private static float ReadPostProcessedValue(float[] values, int rows, int row, int attribute, bool transposed)
+    {
+        return transposed
+            ? values[attribute * rows + row]
+            : values[row * 6 + attribute];
+    }
+
+    /// <summary>
+    /// 解析常见 YOLO 输出布局：[1, 84, 8400] 或 [1, 8400, 84]。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection> ParseYoloDetections(
+        Tensor<float> tensor,
+        float[] values,
+        InferenceInput input)
+    {
+        var dims = tensor.Dimensions.ToArray();
+        if (dims.Length != 3)
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
+        var detections = new List<InferenceDetection>();
+
+        var channelFirst = dims[1] < dims[2];
+        var attributes = channelFirst ? dims[1] : dims[2];
+        var anchors = channelFirst ? dims[2] : dims[1];
+        if (attributes < 6)
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
+        var hasObjectness = attributes == 85;
+        var classStart = hasObjectness ? 5 : 4;
+        var classCount = attributes - classStart;
+
+        for (var anchor = 0; anchor < anchors; anchor++)
+        {
+            var centerX = ReadYoloValue(values, channelFirst, attributes, anchors, anchor, 0);
+            var centerY = ReadYoloValue(values, channelFirst, attributes, anchors, anchor, 1);
+            var width = ReadYoloValue(values, channelFirst, attributes, anchors, anchor, 2);
+            var height = ReadYoloValue(values, channelFirst, attributes, anchors, anchor, 3);
+            var objectness = hasObjectness
+                ? ReadYoloValue(values, channelFirst, attributes, anchors, anchor, 4)
+                : 1f;
+
+            var bestClass = 0;
+            var bestScore = 0f;
+            for (var classIndex = 0; classIndex < classCount; classIndex++)
+            {
+                var score = ReadYoloValue(values, channelFirst, attributes, anchors, anchor, classStart + classIndex);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestClass = classIndex;
+                }
+            }
+
+            var confidence = Math.Clamp(objectness * bestScore, 0f, 1f);
+            if (confidence < _confidenceThreshold)
+            {
+                continue;
+            }
+
+            var normalized = NormalizeLetterboxedBox(
+                centerX - width / 2,
+                centerY - height / 2,
+                centerX + width / 2,
+                centerY + height / 2,
+                input);
+            detections.Add(new InferenceDetection(
+                ResolveLabel(bestClass),
+                confidence,
+                normalized.X,
+                normalized.Y,
+                normalized.Width,
+                normalized.Height));
+        }
+
+        return detections;
+    }
+
+    /// <summary>
+    /// 将类别索引转换为可读标签。
+    /// </summary>
+    private string ResolveLabel(int classIndex)
+    {
+        return classIndex >= 0 && classIndex < _labels.Length
+            ? _labels[classIndex]
+            : $"class_{classIndex}";
+    }
+
+    /// <summary>
+    /// 读取 YOLO 输出中的单个属性值。
+    /// </summary>
+    private static float ReadYoloValue(
+        float[] values,
+        bool channelFirst,
+        int attributes,
+        int anchors,
+        int anchor,
+        int attribute)
+    {
+        return channelFirst
+            ? values[attribute * anchors + anchor]
+            : values[anchor * attributes + attribute];
+    }
+
+    /// <summary>
+    /// 将 letterbox 坐标转换为原图归一化左上角格式。
+    /// </summary>
+    private static InferenceDetection NormalizeLetterboxedBox(
+        double x1,
+        double y1,
+        double x2,
+        double y2,
+        InferenceInput input)
+    {
+        var inputHeight = input.TensorDimensions.Count >= 4 ? input.TensorDimensions[2] : 640;
+        var inputWidth = input.TensorDimensions.Count >= 4 ? input.TensorDimensions[3] : 640;
+        var originalWidth = input.OriginalWidth > 0 ? input.OriginalWidth : inputWidth;
+        var originalHeight = input.OriginalHeight > 0 ? input.OriginalHeight : inputHeight;
+
+        if (Math.Max(Math.Max(x1, x2), Math.Max(y1, y2)) <= 1.5)
+        {
+            return new InferenceDetection(
+                string.Empty,
+                0,
+                Math.Clamp(x1, 0, 1),
+                Math.Clamp(y1, 0, 1),
+                Math.Clamp(x2 - x1, 0, 1),
+                Math.Clamp(y2 - y1, 0, 1));
+        }
+
+        var scale = Math.Min((double)inputWidth / originalWidth, (double)inputHeight / originalHeight);
+        var paddedWidth = originalWidth * scale;
+        var paddedHeight = originalHeight * scale;
+        var padX = (inputWidth - paddedWidth) / 2;
+        var padY = (inputHeight - paddedHeight) / 2;
+
+        var left = Math.Clamp((x1 - padX) / scale, 0, Math.Max(0, originalWidth - 1));
+        var top = Math.Clamp((y1 - padY) / scale, 0, Math.Max(0, originalHeight - 1));
+        var right = Math.Clamp((x2 - padX) / scale, 0, Math.Max(0, originalWidth - 1));
+        var bottom = Math.Clamp((y2 - padY) / scale, 0, Math.Max(0, originalHeight - 1));
+
+        return new InferenceDetection(
+            string.Empty,
+            0,
+            Math.Clamp(left / originalWidth, 0, 1),
+            Math.Clamp(top / originalHeight, 0, 1),
+            Math.Clamp((right - left) / originalWidth, 0, 1),
+            Math.Clamp((bottom - top) / originalHeight, 0, 1));
+    }
+
+    /// <summary>
+    /// 对检测框执行基础非极大值抑制。
+    /// </summary>
+    private static IReadOnlyList<InferenceDetection> ApplyNms(IReadOnlyList<InferenceDetection> detections)
+    {
+        var selected = new List<InferenceDetection>();
+        foreach (var detection in detections.OrderByDescending(detection => detection.Confidence))
+        {
+            if (selected.Any(existing => existing.Label == detection.Label && IoU(existing, detection) > NmsIouThreshold))
+            {
+                continue;
+            }
+
+            selected.Add(detection);
+            if (selected.Count >= MaxDetections)
+            {
+                break;
+            }
+        }
+
+        return selected;
+    }
+
+    /// <summary>
+    /// 计算两个归一化检测框的交并比。
+    /// </summary>
+    private static double IoU(InferenceDetection first, InferenceDetection second)
+    {
+        var left = Math.Max(first.X, second.X);
+        var top = Math.Max(first.Y, second.Y);
+        var right = Math.Min(first.X + first.Width, second.X + second.Width);
+        var bottom = Math.Min(first.Y + first.Height, second.Y + second.Height);
+        var intersection = Math.Max(0, right - left) * Math.Max(0, bottom - top);
+        var union = first.Width * first.Height + second.Width * second.Height - intersection;
+        return union <= 0 ? 0 : intersection / union;
+    }
+
+    /// <summary>
+    /// 从模型 metadata 或 sidecar 文件读取类别名。
+    /// </summary>
+    private string[] GetLabels(InferenceSession session)
+    {
+        if (session.ModelMetadata.CustomMetadataMap.TryGetValue("names", out var namesMetadata))
+        {
+            var metadataLabels = ParseNamesMetadata(namesMetadata);
+            if (metadataLabels.Length > 0)
+            {
+                return metadataLabels;
+            }
+        }
+
+        var sidecarPath = Path.ChangeExtension(_modelPath, ".labels.txt");
+        if (File.Exists(sidecarPath))
+        {
+            var sidecarLabels = File.ReadAllLines(sidecarPath)
+                .Select(label => label.Trim())
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .ToArray();
+            if (sidecarLabels.Length > 0)
+            {
+                return sidecarLabels;
+            }
+        }
+
+        return CocoLabels;
+    }
+
+    /// <summary>
+    /// 解析 YOLO 导出模型中的 names metadata。
+    /// </summary>
+    private static string[] ParseNamesMetadata(string namesMetadata)
+    {
+        var labelsById = new Dictionary<int, string>();
+
+        foreach (Match match in NamesMetadataRegex.Matches(namesMetadata))
+        {
+            if (!int.TryParse(match.Groups[1].Value, out var classId) || classId < 0)
+            {
+                continue;
+            }
+
+            labelsById[classId] = match.Groups[2].Value.Trim();
+        }
+
+        if (labelsById.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var labels = new string[labelsById.Keys.Max() + 1];
+        for (var index = 0; index < labels.Length; index++)
+        {
+            labels[index] = labelsById.TryGetValue(index, out var label) && !string.IsNullOrWhiteSpace(label)
+                ? label
+                : $"class_{index}";
+        }
+
+        return labels;
     }
 }

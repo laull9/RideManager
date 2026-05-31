@@ -9,10 +9,13 @@ directory = "models"
 id = "CAM_FRONT"
 enabled = true
 device = "/dev/video0"
-model = "front-road.onnx"
+model = "yolo26n.onnx"
 width = 1280
 height = 720
+input_width = 640
+input_height = 640
 fps = 30
+confidence_threshold = 0.35
 
 [[cameras]]
 id = "CAM_FACE"
@@ -21,16 +24,22 @@ device = "/dev/video1"
 model = "face-fatigue.onnx"
 width = 640
 height = 480
+input_width = 640
+input_height = 480
 fps = 30
+confidence_threshold = 0.50
 
 [[cameras]]
 id = "CAM_BACK"
 enabled = true
 device = "/dev/video2"
-model = "back-fisheye.onnx"
+model = "yolo26n.onnx"
 width = 1280
 height = 720
+input_width = 640
+input_height = 640
 fps = 30
+confidence_threshold = 0.35
 
 [sensors.radar]
 enabled = true

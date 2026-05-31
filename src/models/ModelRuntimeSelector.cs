@@ -20,13 +20,13 @@ public sealed class ModelRuntimeSelector
     /// <summary>
     /// 为指定模型创建推理引擎。
     /// </summary>
-    public IInferenceEngine Create(string modelName)
+    public IInferenceEngine Create(string modelName, double confidenceThreshold)
     {
         var modelPath = Path.Combine(_options.Directory, modelName);
         return _options.Backend switch
         {
             ModelBackend.Rknn => new RknnInferenceEngine(modelPath),
-            _ => new OnnxInferenceEngine(modelPath)
+            _ => new OnnxInferenceEngine(modelPath, confidenceThreshold)
         };
     }
 }
