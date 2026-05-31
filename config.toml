@@ -1,0 +1,49 @@
+[database]
+connection_string = "Host=localhost;Port=5432;Database=ridemanager;Username=ridemanager;Password=ridemanager"
+
+[models]
+backend = "onnx"
+directory = "models"
+
+[[cameras]]
+id = "CAM_FRONT"
+enabled = true
+device = "/dev/video0"
+model = "front-road.onnx"
+width = 1280
+height = 720
+fps = 30
+
+[[cameras]]
+id = "CAM_FACE"
+enabled = true
+device = "/dev/video1"
+model = "face-fatigue.onnx"
+width = 640
+height = 480
+fps = 30
+
+[[cameras]]
+id = "CAM_BACK"
+enabled = true
+device = "/dev/video2"
+model = "back-fisheye.onnx"
+width = 1280
+height = 720
+fps = 30
+
+[sensors.radar]
+enabled = true
+transport = "bluetooth"
+address = "00:00:00:00:00:00"
+
+[sensors.gyro]
+enabled = false
+transport = "serial"
+address = "/dev/ttyS0"
+
+[actuators.brake]
+enabled = false
+
+[actuators.speaker]
+enabled = false
