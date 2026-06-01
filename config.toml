@@ -19,7 +19,7 @@ confidence_threshold = 0.35
 
 [[cameras]]
 id = "CAM_FACE"
-enabled = true
+enabled = false
 device = "/dev/video1"
 model = "face-fatigue.onnx"
 width = 640
@@ -31,7 +31,7 @@ confidence_threshold = 0.50
 
 [[cameras]]
 id = "CAM_BACK"
-enabled = true
+enabled = false
 device = "/dev/video2"
 model = "yolo26n.onnx"
 width = 1280

@@ -10,6 +10,8 @@ namespace RideManager.Core;
 /// </summary>
 public sealed class RideSupervisor
 {
+    private static readonly TimeSpan LoopDelay = TimeSpan.FromMilliseconds(200);
+
     private readonly IReadOnlyList<CameraPipeline> _cameraPipelines;
     private readonly IReadOnlyList<ISensorReader> _sensorReaders;
     private readonly IBrakeController _brakeController;
@@ -37,6 +39,18 @@ public sealed class RideSupervisor
     }
 
     /// <summary>
+    /// 持续执行检测周期，直到收到取消信号。
+    /// </summary>
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await RunOnceAsync(cancellationToken);
+            await Task.Delay(LoopDelay, cancellationToken);
+        }
+    }
+
+    /// <summary>
     /// 执行一次完整检测周期。
     /// </summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
@@ -46,7 +60,10 @@ public sealed class RideSupervisor
 
         var cameraResults = (await Task.WhenAll(cameraTasks)).SelectMany(result => result).ToArray();
         var sensorResults = (await Task.WhenAll(sensorTasks)).Where(snapshot => snapshot is not null).Cast<SensorSnapshot>().ToArray();
-        var decision = _decisionEngine.Decide(cameraResults, sensorResults);
+        var decision = _decisionEngine.Decide(
+            _cameraPipelines.Select(pipeline => pipeline.CameraId).ToArray(),
+            cameraResults,
+            sensorResults);
 
         await ReactAsync(decision, cancellationToken);
         await _eventWriter.WriteAsync(decision, cancellationToken);

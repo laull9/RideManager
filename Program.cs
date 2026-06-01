@@ -22,7 +22,7 @@ if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
 }
 
 var runtimeSelector = new ModelRuntimeSelector(options.Models);
-var cameraPipelines = CameraPipelineFactory.CreateThreeCameraPipelines(options.Cameras, runtimeSelector);
+var cameraPipelines = CameraPipelineFactory.CreateCameraPipelines(options.Cameras, runtimeSelector);
 await using var cameraDisposer = new AsyncPipelineDisposer(cameraPipelines);
 
 if (args.Contains("livetest", StringComparer.OrdinalIgnoreCase))
@@ -51,7 +51,28 @@ var supervisor = new RideSupervisor(
     new SafetyDecisionEngine(),
     new PostgresDetectionEventWriter(options.Database));
 
-await supervisor.RunOnceAsync(CancellationToken.None);
+var supervisorDuration = ParseDuration(ReadOption(args, "--duration"));
+using var runCancellation = supervisorDuration is { } value
+    ? new CancellationTokenSource(value)
+    : new CancellationTokenSource();
+ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    runCancellation.Cancel();
+};
+
+Console.CancelKeyPress += cancelHandler;
+try
+{
+    await supervisor.RunAsync(runCancellation.Token);
+}
+catch (OperationCanceledException) when (runCancellation.IsCancellationRequested)
+{
+}
+finally
+{
+    Console.CancelKeyPress -= cancelHandler;
+}
 
 /// <summary>
 /// 读取命令行选项值。
@@ -70,7 +91,7 @@ static string? ReadOption(string[] args, string name)
 }
 
 /// <summary>
-/// 解析 livetest 摄像头选择，未指定或 all 表示三路全开。
+/// 解析 livetest 摄像头选择，未指定或 all 表示启用全部已配置摄像头。
 /// </summary>
 static CameraId? ParseOptionalCamera(string? value)
 {
@@ -89,7 +110,7 @@ static CameraId? ParseOptionalCamera(string? value)
 }
 
 /// <summary>
-/// 解析 livetest 运行时长，单位为秒。
+/// 解析运行时长，单位为秒。
 /// </summary>
 static TimeSpan? ParseDuration(string? value)
 {

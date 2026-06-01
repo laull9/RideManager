@@ -10,4 +10,5 @@ public sealed record SafetyDecision(
     SafetyRiskLevel RiskLevel,
     DateTimeOffset DecidedAt,
     IReadOnlyList<CameraFinding> CameraFindings,
-    IReadOnlyList<SensorSnapshot> SensorSnapshots);
+    IReadOnlyList<SensorSnapshot> SensorSnapshots,
+    IReadOnlyList<CameraRiskAssessment> CameraRiskAssessments);

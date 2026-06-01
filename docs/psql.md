@@ -106,7 +106,7 @@ dotnet tool run dotnet-ef database update
 | run_session_id | uuid | 关联运行会话，可为空 |
 | risk_level | varchar(32) | `Normal`、`Warning`、`Danger` |
 | decided_at | timestamptz | 决策时间 |
-| payload_json | jsonb | 原始 `SafetyDecision` 负载 |
+| payload_json | jsonb | 原始 `SafetyDecision` 负载，包含 `cameraRiskAssessments` 等扩展决策字段 |
 | created_at | timestamptz | 写库时间 |
 
 索引：`decided_at`、`risk_level`、`run_session_id`。

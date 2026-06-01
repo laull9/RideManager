@@ -8,6 +8,8 @@ Ef Core
 Bluetooth
 OpenCV
 
+test: xunit
+
 config: config.toml
 
 ## 项目结构

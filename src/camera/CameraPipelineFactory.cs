@@ -4,11 +4,11 @@ using RideManager.Utils;
 namespace RideManager.Camera;
 
 /// <summary>
-/// 负责创建系统固定的三路摄像头处理链路。
+/// 负责按配置创建摄像头处理链路。
 /// </summary>
 public static class CameraPipelineFactory
 {
-    private static readonly CameraId[] RequiredCameras =
+    private static readonly CameraId[] PreferredCameraOrder =
     {
         CameraId.CamFront,
         CameraId.CamFace,
@@ -16,18 +16,30 @@ public static class CameraPipelineFactory
     };
 
     /// <summary>
-    /// 创建前向、面部、后向三路摄像头链路。
+    /// 按启用配置创建摄像头链路，并保持固定的前、面、后顺序。
     /// </summary>
-    public static IReadOnlyList<CameraPipeline> CreateThreeCameraPipelines(
+    public static IReadOnlyList<CameraPipeline> CreateCameraPipelines(
         IEnumerable<CameraOptions> cameraOptions,
         ModelRuntimeSelector runtimeSelector)
+    {
+        return GetEnabledCameraOptionsInPreferredOrder(cameraOptions)
+            .Select(options => CreatePipeline(options, runtimeSelector))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// 提取已启用的摄像头配置，并保持固定的前、面、后顺序。
+    /// </summary>
+    internal static IReadOnlyList<CameraOptions> GetEnabledCameraOptionsInPreferredOrder(
+        IEnumerable<CameraOptions> cameraOptions)
     {
         var enabledCameras = cameraOptions
             .Where(camera => camera.Enabled)
             .ToDictionary(camera => camera.Id);
 
-        return RequiredCameras
-            .Select(cameraId => CreatePipeline(GetRequiredCamera(enabledCameras, cameraId), runtimeSelector))
+        return PreferredCameraOrder
+            .Where(enabledCameras.ContainsKey)
+            .Select(cameraId => enabledCameras[cameraId])
             .ToArray();
     }
 
@@ -76,18 +88,4 @@ public static class CameraPipelineFactory
             || device.StartsWith("simulated://", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// 获取必需的摄像头配置，缺失时直接失败以暴露配置问题。
-    /// </summary>
-    private static CameraOptions GetRequiredCamera(
-        IReadOnlyDictionary<CameraId, CameraOptions> enabledCameras,
-        CameraId cameraId)
-    {
-        if (enabledCameras.TryGetValue(cameraId, out var options))
-        {
-            return options;
-        }
-
-        throw new InvalidOperationException($"Missing enabled camera pipeline config: {cameraId}");
-    }
 }
