@@ -18,6 +18,11 @@ public sealed class ModelRuntimeSelector
     }
 
     /// <summary>
+    /// 获取模型目录。
+    /// </summary>
+    public string ModelDirectory => _options.Directory;
+
+    /// <summary>
     /// 为指定模型创建推理引擎。
     /// </summary>
     public IInferenceEngine Create(string modelName, double confidenceThreshold)

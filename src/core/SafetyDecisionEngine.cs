@@ -90,7 +90,7 @@ public sealed class SafetyDecisionEngine
         }
 
         if (cameraRiskAssessments.Any(assessment => assessment.RiskLevel == SafetyRiskLevel.Warning)
-            || cameraFindings.Any(finding => !IsTrendCamera(finding.CameraId) && finding.Confidence >= 0.8))
+            || cameraFindings.Any(finding => !IsTrendCamera(finding.CameraId) && IsNonTrendAlert(finding)))
         {
             return SafetyRiskLevel.Warning;
         }
@@ -189,7 +189,8 @@ public sealed class SafetyDecisionEngine
     {
         return label.Trim().ToLowerInvariant() switch
         {
-            "lane_line" or "drivable_area" => 0.0,
+            "lane_line" or "drivable_area" or "face_landmarks_106" or "fatigue_normal" or "fatigue_unknown" => 0.0,
+            "fatigue" => 0.9,
             "person" => 1.0,
             "bicycle" or "motorcycle" => 0.95,
             "car" or "bus" or "truck" or "train" => 0.9,
@@ -197,6 +198,14 @@ public sealed class SafetyDecisionEngine
             "traffic light" or "stop sign" => 0.45,
             _ => 0.35
         };
+    }
+
+    /// <summary>
+    /// 判断非趋势摄像头 finding 是否代表可直接提示的风险。
+    /// </summary>
+    private static bool IsNonTrendAlert(CameraFinding finding)
+    {
+        return finding.Confidence >= 0.8 && GetLabelWeight(finding.Label) > 0.0;
     }
 
     /// <summary>

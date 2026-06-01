@@ -9,7 +9,8 @@ public sealed record CameraFinding(
     double Confidence,
     DateTimeOffset ObservedAt,
     CameraBoundingBox? BoundingBox = null,
-    CameraSegmentationMask? SegmentationMask = null);
+    CameraSegmentationMask? SegmentationMask = null,
+    IReadOnlyList<CameraLandmark>? Landmarks = null);
 
 /// <summary>
 /// 表示映射到模型输入 letterbox 空间的二值分割 mask。
@@ -19,3 +20,8 @@ public sealed record CameraSegmentationMask(
     int Width,
     int Height,
     byte[] Data);
+
+/// <summary>
+/// 表示映射到预览原图空间的归一化二维关键点坐标。
+/// </summary>
+public sealed record CameraLandmark(double X, double Y);

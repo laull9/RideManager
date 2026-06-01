@@ -40,6 +40,21 @@ public sealed class CameraPipelineFactoryTests
             camera => Assert.Equal(CameraId.CamBack, camera.Id));
     }
 
+    [Fact]
+    public void CreateFramePreprocessor_UsesFacePipelinePreprocessorForFaceLandmarkModel()
+    {
+        var options = CreateCamera(CameraId.CamFace, enabled: true) with
+        {
+            ModelName = "pfld_lite.onnx",
+            InputWidth = 112,
+            InputHeight = 112
+        };
+
+        var preprocessor = CameraPipelineFactory.CreateFramePreprocessor(options);
+
+        Assert.IsType<FacePipelineFramePreprocessor>(preprocessor);
+    }
+
     private static CameraOptions CreateCamera(CameraId id, bool enabled)
     {
         return new CameraOptions(

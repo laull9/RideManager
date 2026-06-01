@@ -140,10 +140,21 @@ public sealed class CameraLiveTester
             $"fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms pre={result.Metrics.PreprocessLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms drop={result.Metrics.DroppedFrames}",
             y);
 
+        if (result.CameraId == CameraId.CamFace && TryGetFaceFatigueFinding(result.Findings, out var fatigueFinding))
+        {
+            y += 38;
+            DrawFaceFatigueStatus(image, fatigueFinding, y);
+        }
+
         foreach (var finding in result.Findings.Take(6))
         {
             y += 30;
-            DrawText(image, $"{finding.Label} {finding.Confidence:P0}", y);
+            DrawText(image, $"{finding.Label} {finding.Confidence:P0}", y, GetFindingColor(finding));
+
+            if (finding.Landmarks is { Count: > 0 })
+            {
+                DrawLandmarks(image, finding.Landmarks);
+            }
 
             if (finding.BoundingBox is not null)
             {
@@ -237,19 +248,88 @@ public sealed class CameraLiveTester
 
         var color = finding.SegmentationMask is not null
             ? Scalar.Yellow
-            : Scalar.LimeGreen;
+            : GetFindingColor(finding);
         Cv2.Rectangle(image, rect, color, 2);
-        DrawText(image, $"{finding.Label} {finding.Confidence:P0}", Math.Max(24, top - 6));
+        DrawText(image, $"{finding.Label} {finding.Confidence:P0}", Math.Max(24, top - 6), color);
+    }
+
+    /// <summary>
+    /// 从核心输出中获取面部疲劳状态。
+    /// </summary>
+    private static bool TryGetFaceFatigueFinding(IReadOnlyList<CameraFinding> findings, out CameraFinding fatigueFinding)
+    {
+        fatigueFinding = findings.FirstOrDefault(finding =>
+            finding.Label.Equals("fatigue", StringComparison.OrdinalIgnoreCase)
+            || finding.Label.Equals("fatigue_normal", StringComparison.OrdinalIgnoreCase)
+            || finding.Label.Equals("fatigue_unknown", StringComparison.OrdinalIgnoreCase))!;
+        return fatigueFinding is not null;
+    }
+
+    /// <summary>
+    /// 绘制 CAM_FACE 核心疲劳判断状态。
+    /// </summary>
+    private static void DrawFaceFatigueStatus(Mat image, CameraFinding finding, int y)
+    {
+        var (status, color) = finding.Label.ToLowerInvariant() switch
+        {
+            "fatigue" => ("FATIGUE WARNING", new Scalar(0, 0, 255)),
+            "fatigue_normal" => ("FATIGUE NORMAL", Scalar.LimeGreen),
+            "fatigue_unknown" => ("FATIGUE UNKNOWN", new Scalar(0, 220, 255)),
+            _ => ("FATIGUE UNKNOWN", new Scalar(0, 220, 255))
+        };
+        var text = $"{status} {finding.Confidence:P0}";
+        var top = Math.Max(0, y - 28);
+        var width = Math.Min(image.Width - 16, Math.Max(320, text.Length * 17));
+        var rect = new Rect(8, top, width, 38);
+        Cv2.Rectangle(image, rect, new Scalar(0, 0, 0), -1);
+        Cv2.Rectangle(image, rect, color, 2);
+        DrawTextAt(image, text, new Point(18, y), color, 0.78, 2);
+    }
+
+    /// <summary>
+    /// 根据检测类别选择预览颜色。
+    /// </summary>
+    private static Scalar GetFindingColor(CameraFinding finding)
+    {
+        return finding.Label.ToLowerInvariant() switch
+        {
+            "fatigue" => new Scalar(0, 0, 255),
+            "fatigue_normal" => Scalar.LimeGreen,
+            "fatigue_unknown" => new Scalar(0, 220, 255),
+            "face_landmarks_106" => new Scalar(255, 220, 0),
+            _ => finding.SegmentationMask is not null ? Scalar.Yellow : Scalar.LimeGreen
+        };
+    }
+
+    /// <summary>
+    /// 在预览图上绘制 PFLD 人脸关键点。
+    /// </summary>
+    private static void DrawLandmarks(Mat image, IReadOnlyList<CameraLandmark> landmarks)
+    {
+        foreach (var landmark in landmarks)
+        {
+            var x = Math.Clamp((int)Math.Round(landmark.X * image.Width), 0, image.Width - 1);
+            var y = Math.Clamp((int)Math.Round(landmark.Y * image.Height), 0, image.Height - 1);
+            Cv2.Circle(image, new Point(x, y), 2, Scalar.Red, -1);
+            Cv2.Circle(image, new Point(x, y), 3, Scalar.White, 1);
+        }
     }
 
     /// <summary>
     /// 绘制可读性较好的描边文字。
     /// </summary>
-    private static void DrawText(Mat image, string text, int y)
+    private static void DrawText(Mat image, string text, int y, Scalar? color = null)
     {
-        var point = new Point(16, y);
-        Cv2.PutText(image, text, point, HersheyFonts.HersheySimplex, 0.7, Scalar.Black, 4);
-        Cv2.PutText(image, text, point, HersheyFonts.HersheySimplex, 0.7, Scalar.White, 2);
+        DrawTextAt(image, text, new Point(16, y), color ?? Scalar.White, 0.7, 2);
+    }
+
+    /// <summary>
+    /// 在指定位置绘制描边文字。
+    /// </summary>
+    private static void DrawTextAt(Mat image, string text, Point point, Scalar color, double scale, int thickness)
+    {
+        Cv2.PutText(image, text, point, HersheyFonts.HersheySimplex, scale, Scalar.Black, thickness + 2);
+        Cv2.PutText(image, text, point, HersheyFonts.HersheySimplex, scale, color, thickness);
     }
 
     /// <summary>

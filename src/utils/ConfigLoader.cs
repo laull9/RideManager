@@ -47,7 +47,7 @@ public static class ConfigLoader
             new[]
             {
                 new CameraOptions(CameraId.CamFront, true, "/dev/video0", "yolo26n.onnx", 1280, 720, 640, 640, 30, 0.35),
-                new CameraOptions(CameraId.CamFace, true, "/dev/video1", "face-fatigue.onnx", 640, 480, 640, 480, 30, 0.5),
+                new CameraOptions(CameraId.CamFace, true, "/dev/video1", "pfld_lite.onnx", 640, 480, 112, 112, 30, 0.6),
                 new CameraOptions(CameraId.CamBack, true, "/dev/video2", "yolo26n.onnx", 1280, 720, 640, 640, 30, 0.35)
             },
             new ModelOptions(ModelBackend.Onnx, "models"),

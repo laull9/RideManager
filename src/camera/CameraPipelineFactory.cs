@@ -52,8 +52,37 @@ public static class CameraPipelineFactory
         return new CameraPipeline(
             options.Id,
             CreateCameraSource(options),
-            new OpenCvFramePreprocessor(options),
-            new CameraAnalyzer(options.Id, inferenceEngine));
+            CreateFramePreprocessor(options),
+            CreateAnalyzer(options, runtimeSelector, inferenceEngine));
+    }
+
+    /// <summary>
+    /// 按模型类型创建图像预处理器。
+    /// </summary>
+    internal static IFramePreprocessor CreateFramePreprocessor(CameraOptions options)
+    {
+        return IsPfldModel(options.ModelName)
+            ? new FacePipelineFramePreprocessor(options)
+            : new OpenCvFramePreprocessor(options);
+    }
+
+    /// <summary>
+    /// 按模型类型创建图像分析器。
+    /// </summary>
+    private static ICameraAnalyzer CreateAnalyzer(
+        CameraOptions options,
+        ModelRuntimeSelector runtimeSelector,
+        IInferenceEngine inferenceEngine)
+    {
+        return IsPfldModel(options.ModelName)
+            ? new FaceCameraAnalyzer(
+                options.Id,
+                inferenceEngine,
+                runtimeSelector.ModelDirectory,
+                options.InputWidth,
+                options.InputHeight,
+                options.ConfidenceThreshold)
+            : new CameraAnalyzer(options.Id, inferenceEngine);
     }
 
     /// <summary>
@@ -88,4 +117,11 @@ public static class CameraPipelineFactory
             || device.StartsWith("simulated://", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// 判断模型是否为 PFLD 人脸关键点模型。
+    /// </summary>
+    private static bool IsPfldModel(string modelName)
+    {
+        return Path.GetFileName(modelName).Contains("pfld", StringComparison.OrdinalIgnoreCase);
+    }
 }

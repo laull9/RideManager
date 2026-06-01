@@ -38,9 +38,12 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
             var masksByLabel = (output.SegmentationMasks ?? Array.Empty<InferenceSegmentationMask>())
                 .GroupBy(mask => mask.Label, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var landmarks = (output.Landmarks ?? Array.Empty<InferenceLandmark>())
+                .Select(landmark => new CameraLandmark(landmark.X, landmark.Y))
+                .ToArray();
 
             return output.Detections
-                .Select(detection => CreateFinding(detection, masksByLabel, frame.CapturedAt))
+                .Select(detection => CreateFinding(detection, masksByLabel, landmarks, frame.CapturedAt))
                 .ToArray();
         }
 
@@ -55,6 +58,7 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
     private CameraFinding CreateFinding(
         InferenceDetection detection,
         IReadOnlyDictionary<string, InferenceSegmentationMask> masksByLabel,
+        IReadOnlyList<CameraLandmark> landmarks,
         DateTimeOffset capturedAt)
     {
         var mask = masksByLabel.TryGetValue(detection.Label, out var segmentationMask)
@@ -71,7 +75,8 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
             detection.Confidence,
             capturedAt,
             new CameraBoundingBox(detection.X, detection.Y, detection.Width, detection.Height),
-            mask);
+            mask,
+            landmarks.Count > 0 ? landmarks : null);
     }
 
     /// <summary>

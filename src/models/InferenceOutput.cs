@@ -7,7 +7,8 @@ public sealed record InferenceOutput(
     IReadOnlyList<string> Labels,
     double Confidence,
     IReadOnlyList<InferenceDetection>? Detections = null,
-    IReadOnlyList<InferenceSegmentationMask>? SegmentationMasks = null);
+    IReadOnlyList<InferenceSegmentationMask>? SegmentationMasks = null,
+    IReadOnlyList<InferenceLandmark>? Landmarks = null);
 
 /// <summary>
 /// 表示推理输出中的单个目标检测结果。
@@ -28,3 +29,8 @@ public sealed record InferenceSegmentationMask(
     int Width,
     int Height,
     byte[] Data);
+
+/// <summary>
+/// 表示推理输出中的归一化二维关键点坐标。
+/// </summary>
+public sealed record InferenceLandmark(double X, double Y);

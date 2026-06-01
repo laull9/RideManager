@@ -67,6 +67,21 @@ public sealed class SafetyDecisionEngineTests
     }
 
     [Fact]
+    public void Decide_WhenFaceCameraOnlyHasLandmarks_StaysNormal()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
+        var engine = new SafetyDecisionEngine(timeProvider);
+
+        var decision = engine.Decide(
+            new[] { CameraId.CamFace },
+            new[] { CreateFinding(CameraId.CamFace, "face_landmarks_106", 1.0, timeProvider.GetUtcNow()) },
+            Array.Empty<SensorSnapshot>());
+
+        Assert.Equal(SafetyRiskLevel.Normal, decision.RiskLevel);
+        Assert.Empty(decision.CameraRiskAssessments);
+    }
+
+    [Fact]
     public void Decide_WhenBackCameraRiskTrendsUp_ReturnsWarning()
     {
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));

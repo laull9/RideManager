@@ -99,6 +99,7 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
                 {
                     GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                     ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
+                    LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
                     InterOpNumThreads = 1,
                     IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 4)
                 };
@@ -125,6 +126,7 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         var outputName = "output";
         var detections = new List<InferenceDetection>();
         var segmentationMasks = new List<InferenceSegmentationMask>();
+        IReadOnlyList<InferenceLandmark>? landmarks = null;
         var recognizedDetectionOutput = false;
 
         foreach (var result in results)
@@ -137,6 +139,13 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
             var values = tensor.ToArray();
             if (values.Length == 0)
             {
+                continue;
+            }
+
+            var decodedLandmarks = TryParsePfldLandmarks(tensor, values);
+            if (decodedLandmarks is not null)
+            {
+                landmarks = decodedLandmarks;
                 continue;
             }
 
@@ -160,6 +169,15 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
             }
         }
 
+        if (landmarks is { Count: > 0 })
+        {
+            return new InferenceOutput(
+                new[] { "face_landmarks_106" },
+                1.0,
+                new[] { CreatePfldFaceDetection(landmarks) },
+                Landmarks: landmarks);
+        }
+
         if (detections.Count > 0)
         {
             var selected = ApplyNms(detections)
@@ -178,6 +196,64 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         }
 
         return new InferenceOutput(new[] { $"onnx:{outputName}" }, Math.Clamp(best, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 解析 PFLD 106 点模型输出，布局为 [1, 212] 或 [212] 的归一化 x/y 坐标。
+    /// </summary>
+    private static IReadOnlyList<InferenceLandmark>? TryParsePfldLandmarks(Tensor<float> tensor, float[] values)
+    {
+        var dims = tensor.Dimensions.ToArray();
+        var isPfldShape = values.Length == 106 * 2
+            && (dims.Length == 1
+                || (dims.Length == 2 && dims[0] == 1)
+                || (dims.Length == 2 && dims[1] == 1));
+        if (!isPfldShape)
+        {
+            return null;
+        }
+
+        var landmarks = new InferenceLandmark[106];
+        for (var index = 0; index < landmarks.Length; index++)
+        {
+            var x = values[index * 2];
+            var y = values[index * 2 + 1];
+            if (!float.IsFinite(x) || !float.IsFinite(y))
+            {
+                return null;
+            }
+
+            landmarks[index] = new InferenceLandmark(
+                Math.Clamp(x, 0.0, 1.0),
+                Math.Clamp(y, 0.0, 1.0));
+        }
+
+        return landmarks;
+    }
+
+    /// <summary>
+    /// 根据 PFLD 关键点外接范围生成一条面部 finding，便于统一链路显示和存储。
+    /// </summary>
+    private static InferenceDetection CreatePfldFaceDetection(IReadOnlyList<InferenceLandmark> landmarks)
+    {
+        var left = landmarks.Min(landmark => landmark.X);
+        var top = landmarks.Min(landmark => landmark.Y);
+        var right = landmarks.Max(landmark => landmark.X);
+        var bottom = landmarks.Max(landmark => landmark.Y);
+        const double padding = 0.02;
+
+        left = Math.Clamp(left - padding, 0.0, 1.0);
+        top = Math.Clamp(top - padding, 0.0, 1.0);
+        right = Math.Clamp(right + padding, 0.0, 1.0);
+        bottom = Math.Clamp(bottom + padding, 0.0, 1.0);
+
+        return new InferenceDetection(
+            "face_landmarks_106",
+            1.0,
+            left,
+            top,
+            Math.Max(0.001, right - left),
+            Math.Max(0.001, bottom - top));
     }
 
     /// <summary>
