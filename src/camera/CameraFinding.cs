@@ -8,4 +8,14 @@ public sealed record CameraFinding(
     string Label,
     double Confidence,
     DateTimeOffset ObservedAt,
-    CameraBoundingBox? BoundingBox = null);
+    CameraBoundingBox? BoundingBox = null,
+    CameraSegmentationMask? SegmentationMask = null);
+
+/// <summary>
+/// 表示映射到模型输入 letterbox 空间的二值分割 mask。
+/// </summary>
+public sealed record CameraSegmentationMask(
+    string Label,
+    int Width,
+    int Height,
+    byte[] Data);

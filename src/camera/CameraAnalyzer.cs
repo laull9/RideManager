@@ -35,19 +35,43 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
 
         if (output.Detections is { Count: > 0 })
         {
+            var masksByLabel = (output.SegmentationMasks ?? Array.Empty<InferenceSegmentationMask>())
+                .GroupBy(mask => mask.Label, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
             return output.Detections
-                .Select(detection => new CameraFinding(
-                    _cameraId,
-                    detection.Label,
-                    detection.Confidence,
-                    frame.CapturedAt,
-                    new CameraBoundingBox(detection.X, detection.Y, detection.Width, detection.Height)))
+                .Select(detection => CreateFinding(detection, masksByLabel, frame.CapturedAt))
                 .ToArray();
         }
 
         return output.Labels
             .Select(label => new CameraFinding(_cameraId, label, output.Confidence, frame.CapturedAt))
             .ToArray();
+    }
+
+    /// <summary>
+    /// 将模型检测结果转换为摄像头 finding，并附带同标签分割 mask。
+    /// </summary>
+    private CameraFinding CreateFinding(
+        InferenceDetection detection,
+        IReadOnlyDictionary<string, InferenceSegmentationMask> masksByLabel,
+        DateTimeOffset capturedAt)
+    {
+        var mask = masksByLabel.TryGetValue(detection.Label, out var segmentationMask)
+            ? new CameraSegmentationMask(
+                segmentationMask.Label,
+                segmentationMask.Width,
+                segmentationMask.Height,
+                segmentationMask.Data)
+            : null;
+
+        return new CameraFinding(
+            _cameraId,
+            detection.Label,
+            detection.Confidence,
+            capturedAt,
+            new CameraBoundingBox(detection.X, detection.Y, detection.Width, detection.Height),
+            mask);
     }
 
     /// <summary>

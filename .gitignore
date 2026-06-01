@@ -10,4 +10,5 @@ obj/
 *.user
 *.suo
 *.swp
-examples/
+*.pt
+yolopv2.onnx

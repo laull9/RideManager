@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using OpenCvSharp;
 using RideManager.Utils;
 
@@ -12,6 +13,8 @@ public sealed class OpenCvCameraSource : ICameraSource
     private readonly object _gate = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly VideoCapture _capture;
+    private readonly bool _isReplaySource;
+    private readonly TimeSpan _replayFrameInterval;
     private readonly Task _captureTask;
     private CameraFrame? _latestFrame;
     private long _droppedFrames;
@@ -22,6 +25,7 @@ public sealed class OpenCvCameraSource : ICameraSource
     public OpenCvCameraSource(CameraOptions options)
     {
         _options = options;
+        _isReplaySource = IsReplaySource(options.Device);
         _capture = OpenCapture(options.Device);
         ConfigureCapture(_capture, options);
 
@@ -31,6 +35,7 @@ public sealed class OpenCvCameraSource : ICameraSource
             throw new InvalidOperationException($"Failed to open camera device: {options.Device}");
         }
 
+        _replayFrameInterval = GetReplayFrameInterval(_capture, options);
         _captureTask = Task.Run(CaptureLoopAsync);
     }
 
@@ -86,10 +91,16 @@ public sealed class OpenCvCameraSource : ICameraSource
     {
         while (!_stop.IsCancellationRequested)
         {
+            var frameWatch = Stopwatch.StartNew();
             var image = new Mat();
             if (!_capture.Read(image) || image.Empty())
             {
                 image.Dispose();
+                if (_isReplaySource)
+                {
+                    LoopReplaySource();
+                }
+
                 await Task.Delay(20, _stop.Token).ConfigureAwait(false);
                 continue;
             }
@@ -105,6 +116,8 @@ public sealed class OpenCvCameraSource : ICameraSource
 
                 _latestFrame = frame;
             }
+
+            await DelayReplayFrameAsync(frameWatch.Elapsed).ConfigureAwait(false);
         }
     }
 
@@ -126,10 +139,64 @@ public sealed class OpenCvCameraSource : ICameraSource
     /// </summary>
     private static void ConfigureCapture(VideoCapture capture, CameraOptions options)
     {
+        if (IsReplaySource(options.Device))
+        {
+            return;
+        }
+
         capture.Set(VideoCaptureProperties.FrameWidth, options.Width);
         capture.Set(VideoCaptureProperties.FrameHeight, options.Height);
         capture.Set(VideoCaptureProperties.Fps, options.Fps);
         capture.Set(VideoCaptureProperties.BufferSize, 1);
+    }
+
+    /// <summary>
+    /// 文件源按原始 FPS 重放，避免 live test 把整段视频瞬间读完。
+    /// </summary>
+    private async Task DelayReplayFrameAsync(TimeSpan elapsed)
+    {
+        if (!_isReplaySource)
+        {
+            return;
+        }
+
+        var delay = _replayFrameInterval - elapsed;
+        if (delay > TimeSpan.Zero)
+        {
+            await Task.Delay(delay, _stop.Token).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// 文件源读到结尾后回到第一帧，支持循环 live test。
+    /// </summary>
+    private void LoopReplaySource()
+    {
+        _capture.Set(VideoCaptureProperties.PosFrames, 0);
+        _capture.Set(VideoCaptureProperties.PosMsec, 0);
+    }
+
+    /// <summary>
+    /// 获取文件源的播放帧间隔。
+    /// </summary>
+    private static TimeSpan GetReplayFrameInterval(VideoCapture capture, CameraOptions options)
+    {
+        var fps = capture.Get(VideoCaptureProperties.Fps);
+        if (double.IsNaN(fps) || fps <= 0)
+        {
+            fps = options.Fps;
+        }
+
+        fps = Math.Clamp(fps, 1.0, 120.0);
+        return TimeSpan.FromSeconds(1.0 / fps);
+    }
+
+    /// <summary>
+    /// 判断输入源是否为本地图片或视频文件。
+    /// </summary>
+    private static bool IsReplaySource(string device)
+    {
+        return !TryParseDeviceIndex(device, out _) && File.Exists(device);
     }
 
     /// <summary>

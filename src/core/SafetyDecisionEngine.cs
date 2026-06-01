@@ -189,6 +189,7 @@ public sealed class SafetyDecisionEngine
     {
         return label.Trim().ToLowerInvariant() switch
         {
+            "lane_line" or "drivable_area" => 0.0,
             "person" => 1.0,
             "bicycle" or "motorcycle" => 0.95,
             "car" or "bus" or "truck" or "train" => 0.9,

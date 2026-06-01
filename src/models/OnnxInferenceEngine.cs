@@ -124,6 +124,7 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         var best = 0.0;
         var outputName = "output";
         var detections = new List<InferenceDetection>();
+        var segmentationMasks = new List<InferenceSegmentationMask>();
         var recognizedDetectionOutput = false;
 
         foreach (var result in results)
@@ -147,6 +148,7 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
             }
             else
             {
+                detections.AddRange(ParseYoloPv2Segmentation(result.Name, tensor, values, input, segmentationMasks));
                 detections.AddRange(ParseYoloDetections(tensor, values, input));
             }
 
@@ -166,7 +168,8 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
             return new InferenceOutput(
                 selected.Select(detection => detection.Label).ToArray(),
                 selected.Max(detection => detection.Confidence),
-                selected);
+                selected,
+                segmentationMasks);
         }
 
         if (recognizedDetectionOutput)
@@ -175,6 +178,110 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         }
 
         return new InferenceOutput(new[] { $"onnx:{outputName}" }, Math.Clamp(best, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 解析 YOLOPv2 的可行驶区域与车道线分割输出，并以区域 finding 形式交给 live 链路显示。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection> ParseYoloPv2Segmentation(
+        string outputName,
+        Tensor<float> tensor,
+        float[] values,
+        InferenceInput input,
+        List<InferenceSegmentationMask> segmentationMasks)
+    {
+        var dims = tensor.Dimensions.ToArray();
+        if (dims.Length != 4 || dims[0] != 1)
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
+        if (outputName.Contains("lane", StringComparison.OrdinalIgnoreCase) && dims[1] == 1)
+        {
+            return TryCreateMaskDetection("lane_line", values, dims[2], dims[3], input, segmentationMasks);
+        }
+
+        if (outputName.Contains("drivable", StringComparison.OrdinalIgnoreCase) && dims[1] == 2)
+        {
+            return TryCreateTwoClassMaskDetection("drivable_area", values, dims[2], dims[3], input, segmentationMasks);
+        }
+
+        return Array.Empty<InferenceDetection>();
+    }
+
+    /// <summary>
+    /// 从单通道概率图中提取正样本区域。
+    /// </summary>
+    private static IReadOnlyList<InferenceDetection> TryCreateMaskDetection(
+        string label,
+        float[] values,
+        int height,
+        int width,
+        InferenceInput input,
+        List<InferenceSegmentationMask> segmentationMasks)
+    {
+        var bounds = new MaskBounds();
+        var maskData = new byte[height * width];
+        for (var y = 0; y < height; y++)
+        {
+            var rowOffset = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var value = values[rowOffset + x];
+                if (value >= 0.5f)
+                {
+                    maskData[rowOffset + x] = 255;
+                    bounds.Include(x, y, value);
+                }
+            }
+        }
+
+        var detections = bounds.ToDetection(label, width, height, input);
+        if (detections.Count > 0)
+        {
+            segmentationMasks.Add(new InferenceSegmentationMask(label, width, height, maskData));
+        }
+
+        return detections;
+    }
+
+    /// <summary>
+    /// 从两通道语义分割 logits/probability 图中提取类别 1 的区域。
+    /// </summary>
+    private static IReadOnlyList<InferenceDetection> TryCreateTwoClassMaskDetection(
+        string label,
+        float[] values,
+        int height,
+        int width,
+        InferenceInput input,
+        List<InferenceSegmentationMask> segmentationMasks)
+    {
+        var channelSize = height * width;
+        var bounds = new MaskBounds();
+        var maskData = new byte[height * width];
+        for (var y = 0; y < height; y++)
+        {
+            var rowOffset = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var index = rowOffset + x;
+                var background = values[index];
+                var foreground = values[channelSize + index];
+                if (foreground >= background)
+                {
+                    maskData[index] = 255;
+                    bounds.Include(x, y, foreground);
+                }
+            }
+        }
+
+        var detections = bounds.ToDetection(label, width, height, input);
+        if (detections.Count > 0)
+        {
+            segmentationMasks.Add(new InferenceSegmentationMask(label, width, height, maskData));
+        }
+
+        return detections;
     }
 
     /// <summary>
@@ -468,6 +575,60 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         }
 
         return CocoLabels;
+    }
+
+    /// <summary>
+    /// 记录分割 mask 的外接矩形与置信度近似值。
+    /// </summary>
+    private sealed class MaskBounds
+    {
+        private int _left = int.MaxValue;
+        private int _top = int.MaxValue;
+        private int _right = int.MinValue;
+        private int _bottom = int.MinValue;
+        private float _maxValue;
+        private int _count;
+
+        /// <summary>
+        /// 纳入一个正样本像素。
+        /// </summary>
+        public void Include(int x, int y, float value)
+        {
+            _left = Math.Min(_left, x);
+            _top = Math.Min(_top, y);
+            _right = Math.Max(_right, x);
+            _bottom = Math.Max(_bottom, y);
+            _maxValue = Math.Max(_maxValue, value);
+            _count++;
+        }
+
+        /// <summary>
+        /// 转换为归一化检测区域。
+        /// </summary>
+        public IReadOnlyList<InferenceDetection> ToDetection(
+            string label,
+            int width,
+            int height,
+            InferenceInput input)
+        {
+            if (_count == 0)
+            {
+                return Array.Empty<InferenceDetection>();
+            }
+
+            var box = NormalizeLetterboxedBox(_left, _top, _right + 1, _bottom + 1, input);
+            if (box.Width <= 0 || box.Height <= 0)
+            {
+                return Array.Empty<InferenceDetection>();
+            }
+
+            var coverage = _count / Math.Max(1.0, width * height);
+            var confidence = Math.Clamp(Math.Max(_maxValue, coverage), 0.0, 1.0);
+            return new[]
+            {
+                new InferenceDetection(label, confidence, box.X, box.Y, box.Width, box.Height)
+            };
+        }
     }
 
     /// <summary>
