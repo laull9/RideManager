@@ -21,7 +21,7 @@ public sealed class RadarLivePreviewServer : IAsyncDisposable
     public RadarLivePreviewServer(int port, Func<RadarLiveState> getState)
     {
         Port = port;
-        Url = $"http://127.0.0.1:{port}/";
+        Url = $"http://0.0.0.0:{port}/";
         _getState = getState;
         _listener.Prefixes.Add(Url);
         _listener.Start();

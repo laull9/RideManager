@@ -29,7 +29,7 @@ public sealed class CameraLivePreviewServer : IAsyncDisposable
         Action<string> setActiveCamera)
     {
         Port = port;
-        Url = $"http://127.0.0.1:{port}/";
+        Url = $"http://0.0.0.0:{port}/";
         _getActiveCameras = getActiveCameras;
         _setActiveCamera = setActiveCamera;
         _listener.Prefixes.Add(Url);
