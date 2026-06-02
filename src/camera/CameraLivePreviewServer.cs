@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using OpenCvSharp;
+using RideManager.Utils;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
@@ -29,10 +30,10 @@ public sealed class CameraLivePreviewServer : IAsyncDisposable
         Action<string> setActiveCamera)
     {
         Port = port;
-        Url = $"http://0.0.0.0:{port}/";
+        Url = HttpListenerEndpoint.CreateDisplayUrl(port);
         _getActiveCameras = getActiveCameras;
         _setActiveCamera = setActiveCamera;
-        _listener.Prefixes.Add(Url);
+        _listener.Prefixes.Add(HttpListenerEndpoint.CreateListenPrefix(port));
         _listener.Start();
         _listenTask = Task.Run(ListenAsync);
     }

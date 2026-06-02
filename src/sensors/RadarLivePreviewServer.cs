@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using RideManager.Utils;
 
 namespace RideManager.Sensors;
 
@@ -21,9 +22,9 @@ public sealed class RadarLivePreviewServer : IAsyncDisposable
     public RadarLivePreviewServer(int port, Func<RadarLiveState> getState)
     {
         Port = port;
-        Url = $"http://0.0.0.0:{port}/";
+        Url = HttpListenerEndpoint.CreateDisplayUrl(port);
         _getState = getState;
-        _listener.Prefixes.Add(Url);
+        _listener.Prefixes.Add(HttpListenerEndpoint.CreateListenPrefix(port));
         _listener.Start();
         _listenTask = Task.Run(ListenAsync);
     }
