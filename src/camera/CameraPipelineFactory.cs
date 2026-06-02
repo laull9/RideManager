@@ -99,11 +99,23 @@ public static class CameraPipelineFactory
         {
             return new OpenCvCameraSource(options);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or OpenCvSharp.OpenCVException)
+        catch (Exception ex) when (IsOpenCvCaptureUnavailable(ex))
         {
             Console.WriteLine($"Camera {options.Id} fallback to synthetic source: {ex.Message}");
             return new SimulatedCameraSource(options);
         }
+    }
+
+    /// <summary>
+    /// 判断 OpenCV 采集模块是否因为 native runtime 不完整或设备不可用而无法启动。
+    /// </summary>
+    private static bool IsOpenCvCaptureUnavailable(Exception ex)
+    {
+        return ex is InvalidOperationException
+            or OpenCvSharp.OpenCVException
+            or DllNotFoundException
+            or EntryPointNotFoundException
+            || ex is TypeInitializationException { InnerException: DllNotFoundException or EntryPointNotFoundException };
     }
 
     /// <summary>
