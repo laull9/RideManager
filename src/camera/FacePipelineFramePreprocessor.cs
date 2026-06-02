@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using RideManager.Models;
 using RideManager.Utils;
 
 namespace RideManager.Camera;
@@ -28,7 +29,7 @@ public sealed class FacePipelineFramePreprocessor : IFramePreprocessor
         return ValueTask.FromResult(new ProcessedFrame(
             _cameraId,
             frame.CapturedAt,
-            Array.Empty<float>(),
+            new NativeFloatTensor(0),
             Array.Empty<int>(),
             frame.Width,
             frame.Height,

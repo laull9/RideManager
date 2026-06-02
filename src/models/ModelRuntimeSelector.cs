@@ -30,8 +30,22 @@ public sealed class ModelRuntimeSelector
         var modelPath = Path.Combine(_options.Directory, modelName);
         return _options.Backend switch
         {
-            ModelBackend.Rknn => new RknnInferenceEngine(modelPath),
+            ModelBackend.Rknn => new RknnInferenceEngine(ResolveRknnModelPath(modelPath), confidenceThreshold),
             _ => new OnnxInferenceEngine(modelPath, confidenceThreshold)
         };
+    }
+
+    /// <summary>
+    /// 后端选择 RKNN 时优先使用同名 .rknn 模型，便于配置沿用 ONNX 模型名。
+    /// </summary>
+    private static string ResolveRknnModelPath(string configuredPath)
+    {
+        if (string.Equals(Path.GetExtension(configuredPath), ".rknn", StringComparison.OrdinalIgnoreCase))
+        {
+            return configuredPath;
+        }
+
+        var rknnPath = Path.ChangeExtension(configuredPath, ".rknn");
+        return File.Exists(rknnPath) ? rknnPath : configuredPath;
     }
 }

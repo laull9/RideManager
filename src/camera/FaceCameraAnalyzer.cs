@@ -70,8 +70,14 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
             return new[] { CreateStatusFinding("face_crop_empty", frame.CapturedAt) };
         }
 
+        using var landmarkTensor = CreateLandmarkTensor(faceCrop);
         var landmarkOutput = await _landmarkEngine.RunAsync(
-            CreateLandmarkInput(faceCrop, face.Value.Crop),
+            new InferenceInput(
+                _cameraId.ToString(),
+                landmarkTensor,
+                new[] { 1, 3, _landmarkInputHeight, _landmarkInputWidth },
+                (int)Math.Round(face.Value.Crop.Size),
+                (int)Math.Round(face.Value.Crop.Size)),
             cancellationToken);
         var landmarks = (landmarkOutput.Landmarks ?? Array.Empty<InferenceLandmark>())
             .Select(landmark => MapLandmarkToFrame(landmark, face.Value.Crop, frame.OriginalWidth, frame.OriginalHeight))
@@ -125,12 +131,14 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
 
         using var resized = new Mat();
         Cv2.Resize(image, resized, new Size(YuNetInputWidth, YuNetInputHeight), 0, 0, InterpolationFlags.Linear);
-        using var results = session.Run(new[]
-        {
-            NamedOnnxValue.CreateFromTensor(
-                session.InputMetadata.Keys.First(),
-                new DenseTensor<float>(CreateYuNetInput(resized), new[] { 1, 3, YuNetInputHeight, YuNetInputWidth }))
-        });
+        using var inputTensor = CreateYuNetInput(resized);
+        using var inputValue = FixedBufferOnnxValue.CreateFromMemory(
+            OrtMemoryInfo.DefaultInstance,
+            inputTensor.Memory,
+            TensorElementType.Float,
+            new long[] { 1, 3, YuNetInputHeight, YuNetInputWidth },
+            checked((long)inputTensor.Length * sizeof(float)));
+        using var results = session.Run(new[] { session.InputMetadata.Keys.First() }, new[] { inputValue });
         var candidates = DecodeYuNetFaces(results, YuNetInputWidth, YuNetInputHeight, image.Width, image.Height);
         var selected = ApplyNms(candidates).OrderByDescending(candidate => candidate.Area).ToArray();
         return selected.Length == 0 ? null : selected[0];
@@ -448,20 +456,15 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     }
 
     /// <summary>
-    /// 创建 PFLD 人脸 ROI 推理输入。
+    /// 创建 PFLD 人脸 ROI native 输入张量。
     /// </summary>
-    private InferenceInput CreateLandmarkInput(Mat faceCrop, FaceCrop crop)
+    private NativeFloatTensor CreateLandmarkTensor(Mat faceCrop)
     {
         using var resized = new Mat();
         Cv2.Resize(faceCrop, resized, new Size(_landmarkInputWidth, _landmarkInputHeight), 0, 0, InterpolationFlags.Linear);
-        var tensor = new float[3 * _landmarkInputWidth * _landmarkInputHeight];
-        FillBgrNchwTensor(resized, tensor);
-        return new InferenceInput(
-            _cameraId.ToString(),
-            tensor,
-            new[] { 1, 3, _landmarkInputHeight, _landmarkInputWidth },
-            (int)Math.Round(crop.Size),
-            (int)Math.Round(crop.Size));
+        var tensor = new NativeFloatTensor(3 * _landmarkInputWidth * _landmarkInputHeight);
+        FillBgrNchwTensor(resized, tensor.Span);
+        return tensor;
     }
 
     /// <summary>
@@ -481,7 +484,7 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     /// <summary>
     /// 将 BGR uint8 图像转换为 NCHW float32 / 255。
     /// </summary>
-    private static unsafe void FillBgrNchwTensor(Mat bgr, float[] tensor)
+    private static unsafe void FillBgrNchwTensor(Mat bgr, Span<float> tensor)
     {
         var height = bgr.Rows;
         var width = bgr.Cols;
@@ -504,9 +507,10 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     /// <summary>
     /// 创建 YuNet 整帧输入，布局为 BGR NCHW float32。
     /// </summary>
-    private static unsafe float[] CreateYuNetInput(Mat bgr)
+    private static unsafe NativeFloatTensor CreateYuNetInput(Mat bgr)
     {
-        var tensor = new float[3 * bgr.Width * bgr.Height];
+        var tensor = new NativeFloatTensor(3 * bgr.Width * bgr.Height);
+        var span = tensor.Span;
         var height = bgr.Rows;
         var width = bgr.Cols;
         var channelSize = height * width;
@@ -518,9 +522,9 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
             {
                 var pixelIndex = y * width + x;
                 var sourceIndex = x * 3;
-                tensor[pixelIndex] = row[sourceIndex];
-                tensor[channelSize + pixelIndex] = row[sourceIndex + 1];
-                tensor[channelSize * 2 + pixelIndex] = row[sourceIndex + 2];
+                span[pixelIndex] = row[sourceIndex];
+                span[channelSize + pixelIndex] = row[sourceIndex + 1];
+                span[channelSize * 2 + pixelIndex] = row[sourceIndex + 2];
             }
         }
 

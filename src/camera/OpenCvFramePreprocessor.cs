@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using RideManager.Models;
 using RideManager.Utils;
 
 namespace RideManager.Camera;
@@ -36,8 +37,8 @@ public sealed class OpenCvFramePreprocessor : IFramePreprocessor
         using var rgb = new Mat();
         Cv2.CvtColor(letterboxed, rgb, ColorConversionCodes.BGR2RGB);
 
-        var tensor = new float[3 * _targetWidth * _targetHeight];
-        FillNchwTensor(rgb, tensor);
+        var tensor = new NativeFloatTensor(3 * _targetWidth * _targetHeight);
+        FillNchwTensor(rgb, tensor.Span);
 
         return ValueTask.FromResult(new ProcessedFrame(
             _cameraId,
@@ -72,7 +73,7 @@ public sealed class OpenCvFramePreprocessor : IFramePreprocessor
     /// <summary>
     /// 将 RGB uint8 图像转换为 NCHW float32。
     /// </summary>
-    private static unsafe void FillNchwTensor(Mat rgb, float[] tensor)
+    private static unsafe void FillNchwTensor(Mat rgb, Span<float> tensor)
     {
         var height = rgb.Rows;
         var width = rgb.Cols;

@@ -27,7 +27,7 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
         var output = await _inferenceEngine.RunAsync(
             new InferenceInput(
                 frame.CameraId.ToString(),
-                frame.TensorData,
+                frame.Tensor,
                 frame.TensorDimensions,
                 frame.OriginalWidth,
                 frame.OriginalHeight),

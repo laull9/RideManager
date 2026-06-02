@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using RideManager.Models;
 
 namespace RideManager.Camera;
 
@@ -13,7 +14,7 @@ public sealed class ProcessedFrame : IDisposable
     public ProcessedFrame(
         CameraId cameraId,
         DateTimeOffset capturedAt,
-        ReadOnlyMemory<float> tensorData,
+        NativeFloatTensor tensor,
         IReadOnlyList<int> tensorDimensions,
         int originalWidth,
         int originalHeight,
@@ -21,7 +22,7 @@ public sealed class ProcessedFrame : IDisposable
     {
         CameraId = cameraId;
         CapturedAt = capturedAt;
-        TensorData = tensorData;
+        Tensor = tensor;
         TensorDimensions = tensorDimensions;
         OriginalWidth = originalWidth;
         OriginalHeight = originalHeight;
@@ -39,9 +40,19 @@ public sealed class ProcessedFrame : IDisposable
     public DateTimeOffset CapturedAt { get; }
 
     /// <summary>
+    /// 获取模型输入张量 native 缓冲区。
+    /// </summary>
+    public NativeFloatTensor Tensor { get; }
+
+    /// <summary>
     /// 获取模型输入张量数据，布局为 NCHW float32。
     /// </summary>
-    public ReadOnlyMemory<float> TensorData { get; }
+    public Memory<float> TensorData => Tensor.Memory;
+
+    /// <summary>
+    /// 获取模型输入张量 native 首地址。
+    /// </summary>
+    public IntPtr TensorDataPointer => Tensor.Pointer;
 
     /// <summary>
     /// 获取模型输入张量维度。
@@ -68,6 +79,7 @@ public sealed class ProcessedFrame : IDisposable
     /// </summary>
     public void Dispose()
     {
+        Tensor.Dispose();
         PreviewImage.Dispose();
     }
 }

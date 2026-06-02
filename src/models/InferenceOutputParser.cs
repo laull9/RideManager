@@ -1,17 +1,12 @@
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
-using System.Text.RegularExpressions;
-
 namespace RideManager.Models;
 
 /// <summary>
-/// 提供 ONNX Runtime 推理实现。
+/// 将 ONNX/RKNN 共用的原始 float32 输出解析为业务推理结果。
 /// </summary>
-public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
+internal sealed class InferenceOutputParser
 {
     private const double NmsIouThreshold = 0.45;
     private const int MaxDetections = 50;
-    private static readonly Regex NamesMetadataRegex = new("(\\d+)\\s*:\\s*['\"]([^'\"]+)['\"]", RegexOptions.Compiled);
     private static readonly string[] CocoLabels =
     {
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
@@ -27,130 +22,102 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
         "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
         "hair drier", "toothbrush"
     };
-    private readonly string _modelPath;
     private readonly double _confidenceThreshold;
-    private readonly object _gate = new();
-    private InferenceSession? _session;
-    private string[] _labels = CocoLabels;
-    private string? _loadError;
+    private readonly IReadOnlyList<string> _labels;
 
     /// <summary>
-    /// 创建 ONNX 推理引擎。
+    /// 创建统一输出解析器。
     /// </summary>
-    public OnnxInferenceEngine(string modelPath, double confidenceThreshold)
+    public InferenceOutputParser(double confidenceThreshold, IReadOnlyList<string> labels)
     {
-        _modelPath = modelPath;
         _confidenceThreshold = Math.Clamp(confidenceThreshold, 0.0, 1.0);
+        _labels = labels.Count > 0 ? labels : CocoLabels;
     }
 
     /// <summary>
-    /// 使用 ONNX Runtime 运行一次推理，模型缺失时返回可诊断结果。
+    /// 从原始输出张量中解析检测、分割或关键点结果。
     /// </summary>
-    public Task<InferenceOutput> RunAsync(InferenceInput input, CancellationToken cancellationToken)
+    public InferenceOutput Parse(IReadOnlyList<InferenceRawTensor> outputs, InferenceInput input, string backendName)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        var best = 0.0;
+        var outputName = "output";
+        var detections = new List<InferenceDetection>();
+        var segmentationMasks = new List<InferenceSegmentationMask>();
+        IReadOnlyList<InferenceLandmark>? landmarks = null;
+        var recognizedDetectionOutput = false;
 
-        var session = GetSession();
-        if (session is null)
+        foreach (var output in outputs)
         {
-            var reason = File.Exists(_modelPath) ? _loadError ?? "load_failed" : "model_missing";
-            return Task.FromResult(new InferenceOutput(new[] { $"onnx:{Path.GetFileName(_modelPath)}:{reason}" }, 0.0));
-        }
-
-        var inputName = session.InputMetadata.Keys.First();
-        var dimensions = input.TensorDimensions.Select(Convert.ToInt64).ToArray();
-        var byteCount = checked((long)input.TensorElementCount * sizeof(float));
-        using var value = FixedBufferOnnxValue.CreateFromMemory(
-            OrtMemoryInfo.DefaultInstance,
-            input.TensorData,
-            TensorElementType.Float,
-            dimensions,
-            byteCount);
-        using var results = session.Run(new[] { inputName }, new[] { value });
-
-        return Task.FromResult(ParseOutput(results, input));
-    }
-
-    /// <summary>
-    /// 释放 ONNX Runtime 会话。
-    /// </summary>
-    public void Dispose()
-    {
-        _session?.Dispose();
-    }
-
-    /// <summary>
-    /// 懒加载 ONNX 会话。
-    /// </summary>
-    private InferenceSession? GetSession()
-    {
-        if (_session is not null || _loadError is not null || !File.Exists(_modelPath))
-        {
-            return _session;
-        }
-
-        lock (_gate)
-        {
-            if (_session is not null || _loadError is not null)
-            {
-                return _session;
-            }
-
-            try
-            {
-                var sessionOptions = new SessionOptions
-                {
-                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                    ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-                    LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
-                    InterOpNumThreads = 1,
-                    IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 4)
-                };
-                _session = new InferenceSession(_modelPath, sessionOptions);
-                _labels = GetLabels(_session);
-            }
-            catch (Exception ex) when (ex is OnnxRuntimeException or DllNotFoundException or BadImageFormatException)
-            {
-                _loadError = ex.GetType().Name;
-            }
-
-            return _session;
-        }
-    }
-
-    /// <summary>
-    /// 从通用数值输出中提取最高置信度，作为 live 链路的基础后处理。
-    /// </summary>
-    private InferenceOutput ParseOutput(
-        IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results,
-        InferenceInput input)
-    {
-        var outputs = new List<InferenceRawTensor>();
-
-        foreach (var result in results)
-        {
-            if (result.Value is not Tensor<float> tensor)
+            if (output.Values.Length == 0)
             {
                 continue;
             }
 
-            var values = tensor.ToArray();
-            outputs.Add(new InferenceRawTensor(result.Name, tensor.Dimensions.ToArray(), values));
+            var decodedLandmarks = TryParsePfldLandmarks(output.Dimensions, output.Values);
+            if (decodedLandmarks is not null)
+            {
+                landmarks = decodedLandmarks;
+                continue;
+            }
+
+            var decodedPostProcessed = TryParsePostProcessedDetections(output.Dimensions, output.Values, input);
+            if (decodedPostProcessed is not null)
+            {
+                recognizedDetectionOutput = true;
+                detections.AddRange(decodedPostProcessed);
+            }
+            else
+            {
+                detections.AddRange(ParseYoloPv2Segmentation(output.Name, output.Dimensions, output.Values, input, segmentationMasks));
+                detections.AddRange(ParseYoloDetections(output.Dimensions, output.Values, input));
+            }
+
+            var max = output.Values.Max();
+            if (max > best)
+            {
+                best = max;
+                outputName = output.Name;
+            }
         }
 
-        return new InferenceOutputParser(_confidenceThreshold, _labels).Parse(outputs, input, "onnx");
+        if (landmarks is { Count: > 0 })
+        {
+            return new InferenceOutput(
+                new[] { "face_landmarks_106" },
+                1.0,
+                new[] { CreatePfldFaceDetection(landmarks) },
+                Landmarks: landmarks);
+        }
+
+        if (detections.Count > 0)
+        {
+            var selected = ApplyNms(detections)
+                .Take(MaxDetections)
+                .ToArray();
+            return new InferenceOutput(
+                selected.Select(detection => detection.Label).ToArray(),
+                selected.Max(detection => detection.Confidence),
+                selected,
+                segmentationMasks);
+        }
+
+        if (recognizedDetectionOutput)
+        {
+            return new InferenceOutput(Array.Empty<string>(), 0.0, Array.Empty<InferenceDetection>());
+        }
+
+        return new InferenceOutput(new[] { $"{backendName}:{outputName}" }, Math.Clamp(best, 0.0, 1.0));
     }
 
     /// <summary>
     /// 解析 PFLD 106 点模型输出，布局为 [1, 212] 或 [212] 的归一化 x/y 坐标。
     /// </summary>
-    private static IReadOnlyList<InferenceLandmark>? TryParsePfldLandmarks(Tensor<float> tensor, float[] values)
+    private static IReadOnlyList<InferenceLandmark>? TryParsePfldLandmarks(IReadOnlyList<int> dims, float[] values)
     {
-        var dims = tensor.Dimensions.ToArray();
         var isPfldShape = values.Length == 106 * 2
-            && (dims.Length == 1
-                || (dims.Length == 2 && dims[0] == 1)
-                || (dims.Length == 2 && dims[1] == 1));
+            && (dims.Count == 1
+                || (dims.Count == 2 && dims[0] == 1)
+                || (dims.Count == 2 && dims[1] == 1));
         if (!isPfldShape)
         {
             return null;
@@ -202,15 +169,14 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
     /// <summary>
     /// 解析 YOLOPv2 的可行驶区域与车道线分割输出，并以区域 finding 形式交给 live 链路显示。
     /// </summary>
-    private IReadOnlyList<InferenceDetection> ParseYoloPv2Segmentation(
+    private static IReadOnlyList<InferenceDetection> ParseYoloPv2Segmentation(
         string outputName,
-        Tensor<float> tensor,
+        IReadOnlyList<int> dims,
         float[] values,
         InferenceInput input,
         List<InferenceSegmentationMask> segmentationMasks)
     {
-        var dims = tensor.Dimensions.ToArray();
-        if (dims.Length != 4 || dims[0] != 1)
+        if (dims.Count != 4 || dims[0] != 1)
         {
             return Array.Empty<InferenceDetection>();
         }
@@ -307,17 +273,16 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
     /// 解析已在模型内完成后处理的 YOLO 输出：[1, N, 6]，每行 x1,y1,x2,y2,confidence,classId。
     /// </summary>
     private IReadOnlyList<InferenceDetection>? TryParsePostProcessedDetections(
-        Tensor<float> tensor,
+        IReadOnlyList<int> dims,
         float[] values,
         InferenceInput input)
     {
-        var dims = tensor.Dimensions.ToArray();
-        if (dims.Length == 2 && dims[1] == 6)
+        if (dims.Count == 2 && dims[1] == 6)
         {
             return ParsePostProcessedRows(values, dims[0], false, input);
         }
 
-        if (dims.Length != 3 || dims[0] != 1)
+        if (dims.Count != 3 || dims[0] != 1)
         {
             return null;
         }
@@ -387,18 +352,16 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
     /// 解析常见 YOLO 输出布局：[1, 84, 8400] 或 [1, 8400, 84]。
     /// </summary>
     private IReadOnlyList<InferenceDetection> ParseYoloDetections(
-        Tensor<float> tensor,
+        IReadOnlyList<int> dims,
         float[] values,
         InferenceInput input)
     {
-        var dims = tensor.Dimensions.ToArray();
-        if (dims.Length != 3)
+        if (dims.Count != 3)
         {
             return Array.Empty<InferenceDetection>();
         }
 
         var detections = new List<InferenceDetection>();
-
         var channelFirst = dims[1] < dims[2];
         var attributes = channelFirst ? dims[1] : dims[2];
         var anchors = channelFirst ? dims[2] : dims[1];
@@ -462,7 +425,7 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
     /// </summary>
     private string ResolveLabel(int classIndex)
     {
-        return classIndex >= 0 && classIndex < _labels.Length
+        return classIndex >= 0 && classIndex < _labels.Count
             ? _labels[classIndex]
             : $"class_{classIndex}";
     }
@@ -567,36 +530,6 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
     }
 
     /// <summary>
-    /// 从模型 metadata 或 sidecar 文件读取类别名。
-    /// </summary>
-    private string[] GetLabels(InferenceSession session)
-    {
-        if (session.ModelMetadata.CustomMetadataMap.TryGetValue("names", out var namesMetadata))
-        {
-            var metadataLabels = ParseNamesMetadata(namesMetadata);
-            if (metadataLabels.Length > 0)
-            {
-                return metadataLabels;
-            }
-        }
-
-        var sidecarPath = Path.ChangeExtension(_modelPath, ".labels.txt");
-        if (File.Exists(sidecarPath))
-        {
-            var sidecarLabels = File.ReadAllLines(sidecarPath)
-                .Select(label => label.Trim())
-                .Where(label => !string.IsNullOrWhiteSpace(label))
-                .ToArray();
-            if (sidecarLabels.Length > 0)
-            {
-                return sidecarLabels;
-            }
-        }
-
-        return CocoLabels;
-    }
-
-    /// <summary>
     /// 记录分割 mask 的外接矩形与置信度近似值。
     /// </summary>
     private sealed class MaskBounds
@@ -648,38 +581,5 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
                 new InferenceDetection(label, confidence, box.X, box.Y, box.Width, box.Height)
             };
         }
-    }
-
-    /// <summary>
-    /// 解析 YOLO 导出模型中的 names metadata。
-    /// </summary>
-    private static string[] ParseNamesMetadata(string namesMetadata)
-    {
-        var labelsById = new Dictionary<int, string>();
-
-        foreach (Match match in NamesMetadataRegex.Matches(namesMetadata))
-        {
-            if (!int.TryParse(match.Groups[1].Value, out var classId) || classId < 0)
-            {
-                continue;
-            }
-
-            labelsById[classId] = match.Groups[2].Value.Trim();
-        }
-
-        if (labelsById.Count == 0)
-        {
-            return Array.Empty<string>();
-        }
-
-        var labels = new string[labelsById.Keys.Max() + 1];
-        for (var index = 0; index < labels.Length; index++)
-        {
-            labels[index] = labelsById.TryGetValue(index, out var label) && !string.IsNullOrWhiteSpace(label)
-                ? label
-                : $"class_{index}";
-        }
-
-        return labels;
     }
 }

@@ -41,6 +41,8 @@ src/ - 项目源代码
 
 config.toml - 项目配置文件，包含摄像头参数、模型路径、传感器配置等信息
 
+cpp_rknn/ - RKNN C++桥接层代码，提供在RK3588上使用RKNN的接口，使用CMake构建
+    推理传递0拷贝，对接c# native memory
 
 ## **注意事项**
 
@@ -75,4 +77,7 @@ config.toml - 项目配置文件，包含摄像头参数、模型路径、传感
 - [x] 完成前摄像头的车道线检测+目标识别算法
 - [x] 接入面部摄像头 PFLD 106 点关键点模型，并维护 docs/pfld_face_landmarks_csharp.md
 - [x] 完成面部摄像头 YuNet 最大人脸检测 + PFLD 关键点 + 单帧闭眼疲劳检测，并接入 live 测试
-- [] 确保在主项目文件夹dotnet test 也能完成测试tests/ 的测试运行
+- [x] 确保在主项目文件夹dotnet test 也能完成测试tests/ 的测试运行
+- [x] 检查并修复推理输入 0 拷贝链路：预处理直接写入 native float32 tensor，ONNX/YuNet/PFLD 输入通过 FixedBufferOnnxValue 使用同一块 native memory，不再对输入执行 ToArray 复制；同时暴露 TensorDataPointer 供后续 RKNN/C++ 桥接层直接传指针。
+- [x] 创建cpp rknn桥接层 cpp_rknn/，实现在RK3588上的rknn推理，c#桥接cpp的.so，并且保持和onnxruntime的输入输出一致，这样上层算法代码可以无感切换onnx和rknn。
+- [x] scripts/ 目录创建一个便捷的py onnx->rknn转换脚本，使用rknn toolkit的python接口来完成模型转换，需要适配onnx模型的输入输出格式，确保转换后的rknn模型在c#的cpp桥接层能够正确加载和推理。
