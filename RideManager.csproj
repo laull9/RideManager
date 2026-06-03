@@ -10,6 +10,7 @@
     <SelfContained>true</SelfContained>
     <PublishTrimmed>true</PublishTrimmed>
     <PublishSingleFile>true</PublishSingleFile>
+    <RknnNativeBuildDirectory>$(MSBuildProjectDirectory)/cpp_rknn/build</RknnNativeBuildDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,12 +26,11 @@
     <None Update="config.toml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="cpp_rknn/build/libridemanager_rknn.so" Condition="Exists('cpp_rknn/build/libridemanager_rknn.so')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="cpp_rknn/build/librknnrt.so" Condition="Exists('cpp_rknn/build/librknnrt.so')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <RknnNativeLibrary Include="$(RknnNativeBuildDirectory)/libridemanager_rknn.so" />
+    <RknnNativeLibrary Include="$(RknnNativeBuildDirectory)/librknnrt.so" />
   </ItemGroup>
 
   <ItemGroup>
@@ -50,5 +50,27 @@
     <PackageReference Include="Tmds.DBus" Version="0.94.1" />
     <PackageReference Include="Tomlyn" Version="2.4.1" />
   </ItemGroup>
+
+  <Target Name="CopyRknnNativeLibrariesToOutput" AfterTargets="Build">
+    <ItemGroup>
+      <ExistingRknnNativeLibrary Include="@(RknnNativeLibrary)" Condition="Exists('%(Identity)')" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(ExistingRknnNativeLibrary)"
+      DestinationFolder="$(TargetDir)"
+      SkipUnchangedFiles="true"
+      Condition="'@(ExistingRknnNativeLibrary)' != ''" />
+  </Target>
+
+  <Target Name="CopyRknnNativeLibrariesToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <ExistingRknnPublishLibrary Include="@(RknnNativeLibrary)" Condition="Exists('%(Identity)')" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(ExistingRknnPublishLibrary)"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true"
+      Condition="'@(ExistingRknnPublishLibrary)' != ''" />
+  </Target>
 
 </Project>

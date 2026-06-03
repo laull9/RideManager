@@ -13,8 +13,9 @@ The build output contains both `libridemanager_rknn.so` and `librknnrt.so`. The 
 `$ORIGIN` runtime search path, so keeping both files together is sufficient.
 
 When running from the repository with `dotnet run`, build the bridge before building the C#
-project. `RideManager.csproj` copies both libraries from `cpp_rknn/build` into the .NET output
-directory:
+project. `RideManager.csproj` explicitly copies both libraries from `cpp_rknn/build` into the
+.NET output directory after each build. The development loader also falls back to loading the
+bridge directly from `cpp_rknn/build`.
 
 ```bash
 cmake -S cpp_rknn -B cpp_rknn/build -DRKNN_RUNTIME_DIR=/path/to/rknn_runtime
@@ -27,6 +28,7 @@ To diagnose native loader failures:
 ```bash
 ls -l cpp_rknn/build/libridemanager_rknn.so cpp_rknn/build/librknnrt.so
 ldd cpp_rknn/build/libridemanager_rknn.so
+find bin -path '*/linux-arm64/libridemanager_rknn.so' -o -path '*/linux-arm64/librknnrt.so'
 ```
 
 ## Contract

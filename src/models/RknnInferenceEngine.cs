@@ -268,12 +268,14 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
     private static string CreateNativeLoadDiagnostic(Exception exception)
     {
         var bridgePath = Path.Combine(AppContext.BaseDirectory, "libridemanager_rknn.so");
+        var buildBridgePath = Path.Combine(Environment.CurrentDirectory, "cpp_rknn", "build", "libridemanager_rknn.so");
         var bridgeState = File.Exists(bridgePath) ? "present" : "missing";
+        var buildBridgeState = File.Exists(buildBridgePath) ? "present" : "missing";
         return $"{exception.GetType().Name}: {exception.Message} "
-            + $"bridge={bridgePath} ({bridgeState}). "
+            + $"output_bridge={bridgePath} ({bridgeState}), build_bridge={buildBridgePath} ({buildBridgeState}). "
             + "Build with: cmake -S cpp_rknn -B cpp_rknn/build -DRKNN_RUNTIME_DIR=/path/to/rknn_runtime && "
             + "cmake --build cpp_rknn/build --config Release. "
-            + $"If the bridge is present, run: ldd {bridgePath}";
+            + $"If a bridge is present, run: ldd {buildBridgePath}";
     }
 
     /// <summary>
