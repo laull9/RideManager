@@ -24,10 +24,13 @@ if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
 
 if (isCameraLiveTest)
 {
-    options = ApplyLiveTestCameraSourceOverride(
-        options,
-        ParseOptionalCamera(ReadOption(args, "--camera")),
-        ReadOption(args, "--source"));
+    options = options with
+    {
+        Cameras = CameraPipelineFactory.PrepareLiveTestCameraOptions(
+            options.Cameras,
+            ParseOptionalCamera(ReadOption(args, "--camera")),
+            ReadOption(args, "--source"))
+    };
 }
 
 var runtimeSelector = new ModelRuntimeSelector(options.Models);
@@ -116,29 +119,6 @@ static CameraId? ParseOptionalCamera(string? value)
         "CAM_BACK" or "BACK" or "3" => CameraId.CamBack,
         _ => throw new ArgumentException($"Unsupported camera id: {value}")
     };
-}
-
-/// <summary>
-/// 在摄像头 live test 中用图片、视频或流地址覆盖指定摄像头输入源。
-/// </summary>
-static RideManagerOptions ApplyLiveTestCameraSourceOverride(
-    RideManagerOptions options,
-    CameraId? cameraId,
-    string? source)
-{
-    if (string.IsNullOrWhiteSpace(source))
-    {
-        return options;
-    }
-
-    var targetCamera = cameraId ?? CameraId.CamFront;
-    var cameras = options.Cameras
-        .Select(camera => camera.Id == targetCamera
-            ? camera with { Device = source, Enabled = true }
-            : camera)
-        .ToArray();
-
-    return options with { Cameras = cameras };
 }
 
 /// <summary>

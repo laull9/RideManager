@@ -42,6 +42,41 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public void PrepareLiveTestCameraOptions_EnablesOnlySelectedCameraAndOverridesItsSource()
+    {
+        var cameras = new[]
+        {
+            CreateCamera(CameraId.CamFront, enabled: true),
+            CreateCamera(CameraId.CamFace, enabled: true),
+            CreateCamera(CameraId.CamBack, enabled: false)
+        };
+
+        var prepared = CameraPipelineFactory.PrepareLiveTestCameraOptions(
+            cameras,
+            CameraId.CamFront,
+            "videos/test1.mp4");
+
+        Assert.Collection(
+            prepared,
+            camera =>
+            {
+                Assert.Equal(CameraId.CamFront, camera.Id);
+                Assert.True(camera.Enabled);
+                Assert.Equal("videos/test1.mp4", camera.Device);
+            },
+            camera =>
+            {
+                Assert.Equal(CameraId.CamFace, camera.Id);
+                Assert.False(camera.Enabled);
+            },
+            camera =>
+            {
+                Assert.Equal(CameraId.CamBack, camera.Id);
+                Assert.False(camera.Enabled);
+            });
+    }
+
+    [Fact]
     public void CreateFramePreprocessor_UsesFacePipelinePreprocessorForFaceLandmarkModel()
     {
         var options = CreateCamera(CameraId.CamFace, enabled: true) with

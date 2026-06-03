@@ -144,10 +144,11 @@ public static class ConfigLoader
     /// </summary>
     private static ModelBackend ParseBackend(string value)
     {
-        return value.ToLowerInvariant() switch
+        return value.Trim().ToLowerInvariant() switch
         {
+            "onnx" => ModelBackend.Onnx,
             "rknn" => ModelBackend.Rknn,
-            _ => ModelBackend.Onnx
+            _ => throw new InvalidOperationException($"Unsupported models.backend: {value}")
         };
     }
 

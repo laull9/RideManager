@@ -44,6 +44,40 @@ public static class CameraPipelineFactory
     }
 
     /// <summary>
+    /// 为 live test 应用单摄像头筛选和可选输入源覆盖。
+    /// </summary>
+    internal static IReadOnlyList<CameraOptions> PrepareLiveTestCameraOptions(
+        IEnumerable<CameraOptions> cameraOptions,
+        CameraId? cameraId,
+        string? source)
+    {
+        var hasSource = !string.IsNullOrWhiteSpace(source);
+        var targetCamera = cameraId ?? (hasSource ? CameraId.CamFront : (CameraId?)null);
+        if (targetCamera is null)
+        {
+            return cameraOptions.ToArray();
+        }
+
+        return cameraOptions
+            .Select(camera =>
+            {
+                if (camera.Id == targetCamera.Value)
+                {
+                    return camera with
+                    {
+                        Device = hasSource ? source! : camera.Device,
+                        Enabled = true
+                    };
+                }
+
+                return cameraId is not null
+                    ? camera with { Enabled = false }
+                    : camera;
+            })
+            .ToArray();
+    }
+
+    /// <summary>
     /// 创建单路摄像头的采集、预处理、推理分析链路。
     /// </summary>
     private static CameraPipeline CreatePipeline(CameraOptions options, ModelRuntimeSelector runtimeSelector)

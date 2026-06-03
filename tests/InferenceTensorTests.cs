@@ -112,6 +112,16 @@ public sealed class InferenceTensorTests
     }
 
     [Fact]
+    public void ModelRuntimeSelector_RejectsRknnFileWhenBackendIsOnnx()
+    {
+        var selector = new ModelRuntimeSelector(new ModelOptions(ModelBackend.Onnx, "models"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => selector.Create("model.rknn", 0.5));
+
+        Assert.Contains("Set [models] backend = \"rknn\"", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InferenceOutputParser_DecodesYuNetOutputsFromUnifiedEngine()
     {
         const int anchors = 80 * 80;

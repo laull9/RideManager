@@ -23,6 +23,7 @@ public sealed class ModelRuntimeSelector
     public IInferenceEngine Create(string modelName, double confidenceThreshold)
     {
         var modelPath = Path.Combine(_options.Directory, modelName);
+        ValidateConfiguredModelPath(modelPath);
         var resolvedPath = _options.Backend == ModelBackend.Rknn
             ? ResolveRknnModelPath(modelPath)
             : modelPath;
@@ -34,6 +35,20 @@ public sealed class ModelRuntimeSelector
             ModelBackend.Rknn => new RknnInferenceEngine(resolvedPath, confidenceThreshold),
             _ => new OnnxInferenceEngine(resolvedPath, confidenceThreshold)
         };
+    }
+
+    /// <summary>
+    /// 阻止将 RKNN 文件交给 ONNX Runtime，并给出可直接修复的配置提示。
+    /// </summary>
+    private void ValidateConfiguredModelPath(string configuredPath)
+    {
+        if (_options.Backend == ModelBackend.Onnx
+            && string.Equals(Path.GetExtension(configuredPath), ".rknn", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Model backend is onnx but model is an RKNN file: {Path.GetFullPath(configuredPath)}. "
+                + "Set [models] backend = \"rknn\".");
+        }
     }
 
     /// <summary>
