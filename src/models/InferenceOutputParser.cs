@@ -218,7 +218,8 @@ internal sealed class InferenceOutputParser
         return YuNetStrides.Any(stride =>
             outputName.Equals($"cls_{stride}", StringComparison.OrdinalIgnoreCase)
             || outputName.Equals($"obj_{stride}", StringComparison.OrdinalIgnoreCase)
-            || outputName.Equals($"bbox_{stride}", StringComparison.OrdinalIgnoreCase));
+            || outputName.Equals($"bbox_{stride}", StringComparison.OrdinalIgnoreCase)
+            || outputName.Equals($"kps_{stride}", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

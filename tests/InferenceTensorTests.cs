@@ -159,6 +159,35 @@ public sealed class InferenceTensorTests
     }
 
     [Fact]
+    public void InferenceOutputParser_DoesNotParseYuNetKeypointsAsYoloDetections()
+    {
+        const int anchors = 20 * 20;
+        const int anchorIndex = 10 * 20 + 10;
+        var cls = new float[anchors];
+        var obj = new float[anchors];
+        var bbox = new float[anchors * 4];
+        var keypoints = Enumerable.Repeat(2.0f, anchors * 10).ToArray();
+        cls[anchorIndex] = 1.0f;
+        obj[anchorIndex] = 1.0f;
+
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("face", tensor, new[] { 1, 3, 640, 640 }, 640, 480);
+        var outputs = new[]
+        {
+            new InferenceRawTensor("cls_32", new[] { 1, anchors, 1 }, cls),
+            new InferenceRawTensor("obj_32", new[] { 1, anchors, 1 }, obj),
+            new InferenceRawTensor("bbox_32", new[] { 1, anchors, 4 }, bbox),
+            new InferenceRawTensor("kps_32", new[] { 1, anchors, 10 }, keypoints)
+        };
+
+        var output = new InferenceOutputParser(0.6, Array.Empty<string>()).Parse(outputs, input, "onnx");
+
+        var detection = Assert.Single(output.Detections!);
+        Assert.Equal("face", detection.Label);
+        Assert.DoesNotContain(output.Labels, label => label.Equals("bus", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void InferenceOutputParser_DecodesRenamedNhwcYoloPv2SegmentationOutputs()
     {
         using var tensor = new NativeFloatTensor(1);
