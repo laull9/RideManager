@@ -10,6 +10,8 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
     private readonly object _gate = new();
     private IntPtr _context;
     private string? _loadError;
+    private string? _lastReportedDiagnostic;
+    private bool _reportedOutputMetadata;
     private bool _disposed;
 
     /// <summary>
@@ -33,6 +35,7 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
         if (context == IntPtr.Zero)
         {
             var reason = File.Exists(_modelPath) ? _loadError ?? "load_failed" : "model_missing";
+            ReportDiagnostic(reason);
             return Task.FromResult(new InferenceOutput(new[] { $"rknn:{Path.GetFileName(_modelPath)}:{reason}" }, 0.0));
         }
 
@@ -55,10 +58,18 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
 
             if (runStatus != 0)
             {
-                return Task.FromResult(new InferenceOutput(new[] { $"rknn:{RknnNative.GetLastError(context)}" }, 0.0));
+                var error = RknnNative.GetLastError(context);
+                ReportDiagnostic(error);
+                return Task.FromResult(new InferenceOutput(new[] { $"rknn:{error}" }, 0.0));
             }
 
-            var outputs = ReadOutputs(context);
+            ReportOutputMetadata(context);
+            if (!TryReadOutputs(context, out var outputs, out var outputError))
+            {
+                ReportDiagnostic(outputError);
+                return Task.FromResult(new InferenceOutput(new[] { $"rknn:{outputError}" }, 0.0));
+            }
+
             var labels = ReadLabels();
             var result = new InferenceOutputParser(_confidenceThreshold, labels).Parse(outputs, input, "rknn");
             return Task.FromResult(result);
@@ -108,6 +119,10 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
                     _loadError = RknnNative.GetLastError(IntPtr.Zero);
                     _context = IntPtr.Zero;
                 }
+                else
+                {
+                    ReportModelMetadata(_context);
+                }
             }
             catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
             {
@@ -121,36 +136,142 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
     /// <summary>
     /// 读取 native 桥接层保留的当前推理输出。
     /// </summary>
-    private static unsafe IReadOnlyList<InferenceRawTensor> ReadOutputs(IntPtr context)
+    private static unsafe bool TryReadOutputs(
+        IntPtr context,
+        out IReadOnlyList<InferenceRawTensor> outputs,
+        out string error)
     {
         var count = RknnNative.GetOutputCount(context);
         if (count <= 0)
         {
-            return Array.Empty<InferenceRawTensor>();
+            outputs = Array.Empty<InferenceRawTensor>();
+            error = "output_count_zero";
+            return false;
         }
 
-        var outputs = new List<InferenceRawTensor>(count);
+        var result = new List<InferenceRawTensor>(count);
         for (var outputIndex = 0; outputIndex < count; outputIndex++)
         {
             var metadata = new RknnNative.RknnTensorMetadata();
             var metadataStatus = RknnNative.GetOutputMetadata(context, outputIndex, &metadata);
             if (metadataStatus != 0)
             {
-                continue;
+                outputs = Array.Empty<InferenceRawTensor>();
+                error = $"output_{outputIndex}_metadata_failed:{RknnNative.GetLastError(context)}";
+                return false;
             }
 
             var dataStatus = RknnNative.GetOutputData(context, outputIndex, out var dataPointer, out var elementCount);
             if (dataStatus != 0 || dataPointer == IntPtr.Zero || elementCount <= 0)
             {
-                continue;
+                outputs = Array.Empty<InferenceRawTensor>();
+                error = $"output_{outputIndex}_data_failed:{RknnNative.GetLastError(context)}";
+                return false;
+            }
+
+            var dimensions = metadata.GetDimensions();
+            var metadataElementCount = GetElementCount(dimensions);
+            if (metadataElementCount > 0 && metadataElementCount != elementCount)
+            {
+                outputs = Array.Empty<InferenceRawTensor>();
+                error = $"output_{outputIndex}_size_mismatch:metadata={metadataElementCount},data={elementCount}";
+                return false;
             }
 
             var values = new float[elementCount];
             System.Runtime.InteropServices.Marshal.Copy(dataPointer, values, 0, elementCount);
-            outputs.Add(new InferenceRawTensor(metadata.GetName(), metadata.GetDimensions(), values));
+            result.Add(new InferenceRawTensor(metadata.GetName(), dimensions, values));
         }
 
-        return outputs;
+        outputs = result;
+        error = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// 首次加载模型时打印 RKNN Runtime 实际暴露的输入张量。
+    /// </summary>
+    private void ReportModelMetadata(IntPtr context)
+    {
+        var inputs = ReadTensorMetadata(context, RknnNative.GetInputCount(context), input: true);
+        Console.WriteLine($"RKNN loaded model={_modelPath} inputs=[{string.Join(", ", inputs)}]");
+    }
+
+    /// <summary>
+    /// 首次成功推理后打印 RKNN Runtime 实际暴露的输出张量。
+    /// </summary>
+    private void ReportOutputMetadata(IntPtr context)
+    {
+        if (_reportedOutputMetadata)
+        {
+            return;
+        }
+
+        var outputs = ReadTensorMetadata(context, RknnNative.GetOutputCount(context), input: false);
+        Console.WriteLine($"RKNN outputs model={_modelPath} outputs=[{string.Join(", ", outputs)}]");
+        _reportedOutputMetadata = true;
+    }
+
+    /// <summary>
+    /// 读取一组输入或输出张量描述，供启动诊断显示。
+    /// </summary>
+    private static unsafe IReadOnlyList<string> ReadTensorMetadata(IntPtr context, int count, bool input)
+    {
+        var descriptions = new List<string>(Math.Max(0, count));
+        for (var index = 0; index < count; index++)
+        {
+            var metadata = new RknnNative.RknnTensorMetadata();
+            var status = input
+                ? RknnNative.GetInputMetadata(context, index, &metadata)
+                : RknnNative.GetOutputMetadata(context, index, &metadata);
+            if (status != 0)
+            {
+                descriptions.Add($"{index}:metadata_failed");
+                continue;
+            }
+
+            descriptions.Add(
+                $"{metadata.GetName()}:{string.Join('x', metadata.GetDimensions())}:{metadata.Type}:{metadata.Format}");
+        }
+
+        return descriptions;
+    }
+
+    /// <summary>
+    /// 计算张量维度声明的元素数量。
+    /// </summary>
+    private static int GetElementCount(IReadOnlyList<int> dimensions)
+    {
+        if (dimensions.Count == 0 || dimensions.Any(dimension => dimension <= 0))
+        {
+            return 0;
+        }
+
+        var count = 1L;
+        foreach (var dimension in dimensions)
+        {
+            count *= dimension;
+            if (count > int.MaxValue)
+            {
+                return 0;
+            }
+        }
+
+        return (int)count;
+    }
+
+    /// <summary>
+    /// 相同错误只打印一次，避免 live test 每帧刷屏。
+    /// </summary>
+    private void ReportDiagnostic(string diagnostic)
+    {
+        if (string.Equals(_lastReportedDiagnostic, diagnostic, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastReportedDiagnostic = diagnostic;
+        Console.WriteLine($"RKNN diagnostic model={_modelPath}: {diagnostic}");
     }
 
     /// <summary>

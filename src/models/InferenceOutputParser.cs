@@ -47,6 +47,7 @@ internal sealed class InferenceOutputParser
         var segmentationMasks = new List<InferenceSegmentationMask>();
         IReadOnlyList<InferenceLandmark>? landmarks = null;
         var recognizedDetectionOutput = false;
+        var isYoloPv2OutputSet = IsYoloPv2OutputSet(outputs);
         var yunetDetections = TryParseYuNetDetections(outputs, input);
         if (yunetDetections is not null)
         {
@@ -81,7 +82,13 @@ internal sealed class InferenceOutputParser
             }
             else
             {
-                detections.AddRange(ParseYoloPv2Segmentation(output.Name, output.Dimensions, output.Values, input, segmentationMasks));
+                detections.AddRange(ParseYoloPv2Segmentation(
+                    output.Name,
+                    output.Dimensions,
+                    output.Values,
+                    input,
+                    segmentationMasks,
+                    isYoloPv2OutputSet));
                 detections.AddRange(ParseYoloDetections(output.Dimensions, output.Values, input));
             }
 
@@ -375,24 +382,81 @@ internal sealed class InferenceOutputParser
         IReadOnlyList<int> dims,
         float[] values,
         InferenceInput input,
-        List<InferenceSegmentationMask> segmentationMasks)
+        List<InferenceSegmentationMask> segmentationMasks,
+        bool allowShapeInference)
     {
-        if (dims.Count != 4 || dims[0] != 1)
+        if (!TryGetSegmentationLayout(dims, out var layout))
         {
             return Array.Empty<InferenceDetection>();
         }
 
-        if (outputName.Contains("lane", StringComparison.OrdinalIgnoreCase) && dims[1] == 1)
+        var isLaneLine = outputName.Contains("lane", StringComparison.OrdinalIgnoreCase)
+            || allowShapeInference && layout.Channels == 1;
+        if (isLaneLine && layout.Channels == 1)
         {
-            return TryCreateMaskDetection("lane_line", values, dims[2], dims[3], input, segmentationMasks);
+            return TryCreateMaskDetection("lane_line", values, layout.Height, layout.Width, input, segmentationMasks);
         }
 
-        if (outputName.Contains("drivable", StringComparison.OrdinalIgnoreCase) && dims[1] == 2)
+        var isDrivableArea = outputName.Contains("drivable", StringComparison.OrdinalIgnoreCase)
+            || allowShapeInference && layout.Channels == 2;
+        if (isDrivableArea && layout.Channels == 2)
         {
-            return TryCreateTwoClassMaskDetection("drivable_area", values, dims[2], dims[3], input, segmentationMasks);
+            return TryCreateTwoClassMaskDetection(
+                "drivable_area",
+                values,
+                layout,
+                input,
+                segmentationMasks);
         }
 
         return Array.Empty<InferenceDetection>();
+    }
+
+    /// <summary>
+    /// 判断输出集合是否符合 YOLOPv2 的检测、可行驶区域和车道线三输出特征。
+    /// RKNN 转换后输出名可能不再保留 ONNX 名称，因此需要按形状识别。
+    /// </summary>
+    private static bool IsYoloPv2OutputSet(IReadOnlyList<InferenceRawTensor> outputs)
+    {
+        var hasDetection = outputs.Any(output => IsYoloDetectionShape(output.Dimensions));
+        var segmentationChannels = outputs
+            .Select(output => TryGetSegmentationLayout(output.Dimensions, out var layout) ? layout.Channels : 0)
+            .ToHashSet();
+        return hasDetection && segmentationChannels.Contains(1) && segmentationChannels.Contains(2);
+    }
+
+    /// <summary>
+    /// 判断张量是否为常见 YOLO 检测头布局。
+    /// </summary>
+    private static bool IsYoloDetectionShape(IReadOnlyList<int> dims)
+    {
+        return dims.Count == 3
+            && dims[0] == 1
+            && (dims[1] >= 6 || dims[2] >= 6);
+    }
+
+    /// <summary>
+    /// 识别 NCHW 或 NHWC 的单批次语义分割输出。
+    /// </summary>
+    private static bool TryGetSegmentationLayout(IReadOnlyList<int> dims, out SegmentationLayout layout)
+    {
+        if (dims.Count == 4 && dims[0] == 1)
+        {
+            if (dims[1] is 1 or 2 && dims[2] > 1 && dims[3] > 1)
+            {
+                layout = new SegmentationLayout(dims[1], dims[3], dims[2], ChannelFirst: true);
+                return true;
+            }
+
+            if (dims[3] is 1 or 2 && dims[1] > 1 && dims[2] > 1)
+            {
+                layout = new SegmentationLayout(dims[3], dims[2], dims[1], ChannelFirst: false);
+                return true;
+            }
+        }
+
+        layout = default;
+        return false;
     }
 
     /// <summary>
@@ -406,6 +470,11 @@ internal sealed class InferenceOutputParser
         InferenceInput input,
         List<InferenceSegmentationMask> segmentationMasks)
     {
+        if (values.Length < height * width)
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
         var bounds = new MaskBounds();
         var maskData = new byte[height * width];
         for (var y = 0; y < height; y++)
@@ -437,12 +506,18 @@ internal sealed class InferenceOutputParser
     private static IReadOnlyList<InferenceDetection> TryCreateTwoClassMaskDetection(
         string label,
         float[] values,
-        int height,
-        int width,
+        SegmentationLayout layout,
         InferenceInput input,
         List<InferenceSegmentationMask> segmentationMasks)
     {
+        var height = layout.Height;
+        var width = layout.Width;
         var channelSize = height * width;
+        if (values.Length < channelSize * 2)
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
         var bounds = new MaskBounds();
         var maskData = new byte[height * width];
         for (var y = 0; y < height; y++)
@@ -451,8 +526,8 @@ internal sealed class InferenceOutputParser
             for (var x = 0; x < width; x++)
             {
                 var index = rowOffset + x;
-                var background = values[index];
-                var foreground = values[channelSize + index];
+                var background = layout.ChannelFirst ? values[index] : values[index * 2];
+                var foreground = layout.ChannelFirst ? values[channelSize + index] : values[index * 2 + 1];
                 if (foreground >= background)
                 {
                     maskData[index] = 255;
@@ -722,6 +797,11 @@ internal sealed class InferenceOutputParser
     /// 表示 YuNet 输出张量排布。
     /// </summary>
     private readonly record struct YuNetLayout(YuNetLayoutKind Kind, int Width, int Height, int AnchorCount);
+
+    /// <summary>
+    /// 表示语义分割输出的通道数、尺寸和内存布局。
+    /// </summary>
+    private readonly record struct SegmentationLayout(int Channels, int Width, int Height, bool ChannelFirst);
 
     /// <summary>
     /// 表示 YuNet 输出张量排布类型。

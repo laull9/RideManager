@@ -147,4 +147,31 @@ public sealed class InferenceTensorTests
         Assert.Equal(0.05, detection.Width, 6);
         Assert.Equal(0.05, detection.Height, 6);
     }
+
+    [Fact]
+    public void InferenceOutputParser_DecodesRenamedNhwcYoloPv2SegmentationOutputs()
+    {
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("front", tensor, new[] { 1, 3, 640, 640 }, 640, 640);
+        var detections = new float[85 * 100];
+        var drivableArea = Enumerable.Range(0, 12)
+            .SelectMany(index => index is 5 or 6 ? new[] { 0.0f, 1.0f } : new[] { 1.0f, 0.0f })
+            .ToArray();
+        var laneLine = Enumerable.Range(0, 12)
+            .Select(index => index is 5 or 6 ? 1.0f : 0.0f)
+            .ToArray();
+        var outputs = new[]
+        {
+            new InferenceRawTensor("output0", new[] { 1, 85, 100 }, detections),
+            new InferenceRawTensor("output1", new[] { 1, 3, 4, 2 }, drivableArea),
+            new InferenceRawTensor("output2", new[] { 1, 3, 4, 1 }, laneLine)
+        };
+
+        var output = new InferenceOutputParser(0.35, Array.Empty<string>()).Parse(outputs, input, "rknn");
+
+        Assert.Contains(output.Detections!, detection => detection.Label == "drivable_area");
+        Assert.Contains(output.Detections!, detection => detection.Label == "lane_line");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "drivable_area");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "lane_line");
+    }
 }

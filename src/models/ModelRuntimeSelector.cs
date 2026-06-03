@@ -23,10 +23,16 @@ public sealed class ModelRuntimeSelector
     public IInferenceEngine Create(string modelName, double confidenceThreshold)
     {
         var modelPath = Path.Combine(_options.Directory, modelName);
+        var resolvedPath = _options.Backend == ModelBackend.Rknn
+            ? ResolveRknnModelPath(modelPath)
+            : modelPath;
+        Console.WriteLine(
+            $"Model runtime backend={_options.Backend.ToString().ToLowerInvariant()} model={Path.GetFullPath(resolvedPath)}");
+
         return _options.Backend switch
         {
-            ModelBackend.Rknn => new RknnInferenceEngine(ResolveRknnModelPath(modelPath), confidenceThreshold),
-            _ => new OnnxInferenceEngine(modelPath, confidenceThreshold)
+            ModelBackend.Rknn => new RknnInferenceEngine(resolvedPath, confidenceThreshold),
+            _ => new OnnxInferenceEngine(resolvedPath, confidenceThreshold)
         };
     }
 

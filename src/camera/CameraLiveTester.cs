@@ -338,6 +338,6 @@ public sealed class CameraLiveTester
     private static string FormatMetrics(CameraPipelineResult result)
     {
         var labels = string.Join(',', result.Findings.Take(8).Select(finding => $"{finding.Label}:{finding.Confidence:F2}"));
-        return $"{result.CameraId} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
+        return $"{result.CameraId} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
     }
 }
