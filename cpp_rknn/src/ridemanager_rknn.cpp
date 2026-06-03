@@ -119,6 +119,56 @@ int32_t from_rknn_tensor_format(rknn_tensor_format format)
     }
 }
 
+/// 将 RKNN 模型声明的 NHWC 输入维度用于 NCHW 到 NHWC 的数据转置。
+bool stage_nchw_as_nhwc(
+    const rm_rknn_input_tensor& source,
+    const rknn_tensor_attr& input_attr,
+    int32_t type_size,
+    std::vector<uint8_t>& staging_buffer)
+{
+    if (input_attr.n_dims != 4 || type_size <= 0)
+    {
+        return false;
+    }
+
+    const int64_t batch = input_attr.dims[0];
+    const int64_t height = input_attr.dims[1];
+    const int64_t width = input_attr.dims[2];
+    const int64_t channels = input_attr.dims[3];
+    const int64_t element_count = batch * height * width * channels;
+    if (batch <= 0 || height <= 0 || width <= 0 || channels <= 0
+        || element_count != source.element_count)
+    {
+        return false;
+    }
+
+    staging_buffer.resize(static_cast<size_t>(element_count) * static_cast<size_t>(type_size));
+    const auto* source_bytes = static_cast<const uint8_t*>(source.data);
+    auto* target_bytes = staging_buffer.data();
+    for (int64_t batch_index = 0; batch_index < batch; batch_index++)
+    {
+        for (int64_t height_index = 0; height_index < height; height_index++)
+        {
+            for (int64_t width_index = 0; width_index < width; width_index++)
+            {
+                for (int64_t channel_index = 0; channel_index < channels; channel_index++)
+                {
+                    const auto source_index =
+                        ((batch_index * channels + channel_index) * height + height_index) * width + width_index;
+                    const auto target_index =
+                        ((batch_index * height + height_index) * width + width_index) * channels + channel_index;
+                    std::memcpy(
+                        target_bytes + target_index * type_size,
+                        source_bytes + source_index * type_size,
+                        static_cast<size_t>(type_size));
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 /// 填充张量 metadata。
 void fill_tensor_metadata(const rknn_tensor_attr& attr, int32_t index, rm_rknn_tensor_metadata* metadata)
 {
@@ -148,6 +198,7 @@ struct rm_rknn_context
 {
     rknn_context handle = 0;
     std::vector<rknn_tensor_attr> input_attrs;
+    std::vector<std::vector<uint8_t>> input_staging_buffers;
     std::vector<rknn_tensor_attr> output_attrs;
     std::vector<rknn_output> outputs;
     bool outputs_valid = false;
@@ -229,6 +280,7 @@ int32_t rm_rknn_create(const char* model_path, rm_rknn_context** out_context)
             return fail_global(message);
         }
     }
+    context->input_staging_buffers.resize(io_num.n_input);
 
     context->output_attrs.resize(io_num.n_output);
     for (uint32_t index = 0; index < io_num.n_output; index++)
@@ -351,11 +403,28 @@ int32_t rm_rknn_run(
 
         auto& target = rknn_inputs[static_cast<size_t>(input_index)];
         target.index = static_cast<uint32_t>(source.index);
-        target.buf = const_cast<void*>(source.data);
         target.size = static_cast<uint32_t>(byte_count);
         target.pass_through = 0;
         target.type = to_rknn_tensor_type(source.type);
-        target.fmt = to_rknn_tensor_format(source.format, input_attr.fmt);
+        if (source.format == RM_RKNN_TENSOR_FORMAT_NCHW && input_attr.fmt == RKNN_TENSOR_NHWC)
+        {
+            auto& staging_buffer = context->input_staging_buffers[static_cast<size_t>(source.index)];
+            if (!stage_nchw_as_nhwc(source, input_attr, type_size, staging_buffer))
+            {
+                std::ostringstream builder;
+                builder << "input " << source.index
+                    << " cannot convert NCHW data to the model's NHWC layout";
+                return fail_context(context, builder.str());
+            }
+
+            target.buf = staging_buffer.data();
+            target.fmt = RKNN_TENSOR_NHWC;
+        }
+        else
+        {
+            target.buf = const_cast<void*>(source.data);
+            target.fmt = to_rknn_tensor_format(source.format, input_attr.fmt);
+        }
     }
 
     auto status = rknn_inputs_set(context->handle, static_cast<uint32_t>(rknn_inputs.size()), rknn_inputs.data());

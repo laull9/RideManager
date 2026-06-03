@@ -38,6 +38,9 @@ find bin -path '*/linux-arm64/libridemanager_rknn.so' -o -path '*/linux-arm64/li
 - Supported input data types are float32, int8, and uint8.
 - Use `RM_RKNN_TENSOR_FORMAT_AUTO` to reuse the model input layout reported by RKNN Runtime.
 - RideManager's C# preprocessors send float32 NCHW tensors and explicitly set `RM_RKNN_TENSOR_FORMAT_NCHW`.
-- The bridge passes input pointers directly to `rknn_inputs_set`; no input copy is made in the bridge.
+- When RKNN Runtime reports a rank-4 NHWC model input, the bridge transposes RideManager's NCHW
+  buffer into a reused NHWC staging buffer before `rknn_inputs_set`. This is required by RKNN
+  Runtime builds whose normalize path only accepts NHWC source layout.
+- Inputs that already match the model layout are passed directly to `rknn_inputs_set`.
 - Outputs are requested as float32 and kept valid until the next `rm_rknn_run` or `rm_rknn_destroy`.
 - C# copies output tensors immediately, then uses the same post-processing parser as ONNX Runtime.

@@ -60,7 +60,7 @@ RM_RKNN_EXPORT int32_t rm_rknn_create(const char* model_path, rm_rknn_context** 
 /// 销毁 RKNN Runtime 上下文。
 RM_RKNN_EXPORT void rm_rknn_destroy(rm_rknn_context* context);
 
-/// 使用外部输入指针数组运行一次推理。
+/// 使用外部输入指针数组运行一次推理；必要时桥接层会暂存并转换输入布局。
 RM_RKNN_EXPORT int32_t rm_rknn_run(
     rm_rknn_context* context,
     const rm_rknn_input_tensor* inputs,
