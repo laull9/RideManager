@@ -10,6 +10,7 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
     private readonly object _gate = new();
     private IntPtr _context;
     private string? _loadError;
+    private string? _loadDiagnostic;
     private string? _lastReportedDiagnostic;
     private bool _reportedOutputMetadata;
     private bool _disposed;
@@ -35,7 +36,7 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
         if (context == IntPtr.Zero)
         {
             var reason = File.Exists(_modelPath) ? _loadError ?? "load_failed" : "model_missing";
-            ReportDiagnostic(reason);
+            ReportDiagnostic(_loadDiagnostic ?? reason);
             return Task.FromResult(new InferenceOutput(new[] { $"rknn:{Path.GetFileName(_modelPath)}:{reason}" }, 0.0));
         }
 
@@ -127,6 +128,7 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
             catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
             {
                 _loadError = ex.GetType().Name;
+                _loadDiagnostic = CreateNativeLoadDiagnostic(ex);
             }
 
             return _context;
@@ -258,6 +260,20 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
         }
 
         return (int)count;
+    }
+
+    /// <summary>
+    /// 将 P/Invoke 加载异常扩展为包含部署路径和排查命令的诊断信息。
+    /// </summary>
+    private static string CreateNativeLoadDiagnostic(Exception exception)
+    {
+        var bridgePath = Path.Combine(AppContext.BaseDirectory, "libridemanager_rknn.so");
+        var bridgeState = File.Exists(bridgePath) ? "present" : "missing";
+        return $"{exception.GetType().Name}: {exception.Message} "
+            + $"bridge={bridgePath} ({bridgeState}). "
+            + "Build with: cmake -S cpp_rknn -B cpp_rknn/build -DRKNN_RUNTIME_DIR=/path/to/rknn_runtime && "
+            + "cmake --build cpp_rknn/build --config Release. "
+            + $"If the bridge is present, run: ldd {bridgePath}";
     }
 
     /// <summary>

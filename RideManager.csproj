@@ -28,6 +28,9 @@
     <None Include="cpp_rknn/build/libridemanager_rknn.so" Condition="Exists('cpp_rknn/build/libridemanager_rknn.so')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="cpp_rknn/build/librknnrt.so" Condition="Exists('cpp_rknn/build/librknnrt.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <ItemGroup>

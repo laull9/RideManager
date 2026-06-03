@@ -43,7 +43,19 @@ target_link_libraries(ridemanager_rknn
 set_target_properties(ridemanager_rknn PROPERTIES
     OUTPUT_NAME ridemanager_rknn
     CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES)
+    VISIBILITY_INLINES_HIDDEN YES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN")
+
+add_custom_command(TARGET ridemanager_rknn POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${RKNN_LIBRARY}"
+        "$<TARGET_FILE_DIR:ridemanager_rknn>/librknnrt.so"
+    COMMENT "Copying RKNN Runtime next to libridemanager_rknn.so")
 
 install(TARGETS ridemanager_rknn
     LIBRARY DESTINATION lib)
+
+install(FILES "${RKNN_LIBRARY}"
+    DESTINATION lib
+    RENAME librknnrt.so)

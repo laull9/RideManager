@@ -9,7 +9,25 @@ cmake -S cpp_rknn -B cpp_rknn/build -DRKNN_RUNTIME_DIR=/path/to/rknn_runtime
 cmake --build cpp_rknn/build --config Release
 ```
 
-The C# P/Invoke loader looks for `libridemanager_rknn.so`. Put the built library next to the RideManager executable or in a directory covered by `LD_LIBRARY_PATH`.
+The build output contains both `libridemanager_rknn.so` and `librknnrt.so`. The bridge has an
+`$ORIGIN` runtime search path, so keeping both files together is sufficient.
+
+When running from the repository with `dotnet run`, build the bridge before building the C#
+project. `RideManager.csproj` copies both libraries from `cpp_rknn/build` into the .NET output
+directory:
+
+```bash
+cmake -S cpp_rknn -B cpp_rknn/build -DRKNN_RUNTIME_DIR=/path/to/rknn_runtime
+cmake --build cpp_rknn/build --config Release
+dotnet run -- livetest --camera CAM_FRONT --source videos/test1.mp4 --headless
+```
+
+To diagnose native loader failures:
+
+```bash
+ls -l cpp_rknn/build/libridemanager_rknn.so cpp_rknn/build/librknnrt.so
+ldd cpp_rknn/build/libridemanager_rknn.so
+```
 
 ## Contract
 
