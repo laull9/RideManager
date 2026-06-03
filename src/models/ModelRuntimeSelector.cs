@@ -18,11 +18,6 @@ public sealed class ModelRuntimeSelector
     }
 
     /// <summary>
-    /// 获取模型目录。
-    /// </summary>
-    public string ModelDirectory => _options.Directory;
-
-    /// <summary>
     /// 为指定模型创建推理引擎。
     /// </summary>
     public IInferenceEngine Create(string modelName, double confidenceThreshold)
@@ -36,7 +31,7 @@ public sealed class ModelRuntimeSelector
     }
 
     /// <summary>
-    /// 后端选择 RKNN 时优先使用同名 .rknn 模型，便于配置沿用 ONNX 模型名。
+    /// 后端选择 RKNN 时始终使用同名 .rknn 模型，便于配置沿用 ONNX 模型名。
     /// </summary>
     private static string ResolveRknnModelPath(string configuredPath)
     {
@@ -45,7 +40,6 @@ public sealed class ModelRuntimeSelector
             return configuredPath;
         }
 
-        var rknnPath = Path.ChangeExtension(configuredPath, ".rknn");
-        return File.Exists(rknnPath) ? rknnPath : configuredPath;
+        return Path.ChangeExtension(configuredPath, ".rknn");
     }
 }

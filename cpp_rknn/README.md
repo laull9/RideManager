@@ -17,6 +17,7 @@ The C# P/Invoke loader looks for `libridemanager_rknn.so`. Put the built library
 - Each input carries its model input index, element count, data pointer, data type, and layout.
 - Supported input data types are float32, int8, and uint8.
 - Use `RM_RKNN_TENSOR_FORMAT_AUTO` to reuse the model input layout reported by RKNN Runtime.
+- RideManager's C# preprocessors send float32 NCHW tensors and explicitly set `RM_RKNN_TENSOR_FORMAT_NCHW`.
 - The bridge passes input pointers directly to `rknn_inputs_set`; no input copy is made in the bridge.
 - Outputs are requested as float32 and kept valid until the next `rm_rknn_run` or `rm_rknn_destroy`.
 - C# copies output tensors immediately, then uses the same post-processing parser as ONNX Runtime.

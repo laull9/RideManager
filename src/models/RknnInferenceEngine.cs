@@ -48,7 +48,7 @@ public sealed class RknnInferenceEngine : IInferenceEngine, IDisposable
                     Data = input.TensorDataPointer,
                     ElementCount = input.TensorElementCount,
                     Type = RknnNative.RknnTensorType.Float32,
-                    Format = RknnNative.RknnTensorFormat.Auto
+                    Format = RknnNative.RknnTensorFormat.Nchw
                 };
                 runStatus = RknnNative.Run(context, nativeInputs, 1);
             }

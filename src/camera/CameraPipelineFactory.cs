@@ -69,7 +69,7 @@ public static class CameraPipelineFactory
     /// <summary>
     /// 按模型类型创建图像分析器。
     /// </summary>
-    private static ICameraAnalyzer CreateAnalyzer(
+    internal static ICameraAnalyzer CreateAnalyzer(
         CameraOptions options,
         ModelRuntimeSelector runtimeSelector,
         IInferenceEngine inferenceEngine)
@@ -77,11 +77,10 @@ public static class CameraPipelineFactory
         return IsPfldModel(options.ModelName)
             ? new FaceCameraAnalyzer(
                 options.Id,
+                runtimeSelector.Create(FaceCameraAnalyzer.FaceDetectorModelName, options.ConfidenceThreshold),
                 inferenceEngine,
-                runtimeSelector.ModelDirectory,
                 options.InputWidth,
-                options.InputHeight,
-                options.ConfidenceThreshold)
+                options.InputHeight)
             : new CameraAnalyzer(options.Id, inferenceEngine);
     }
 

@@ -86,4 +86,65 @@ public sealed class InferenceTensorTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task ModelRuntimeSelector_DoesNotPassOnnxFileToRknnRuntime()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"ridemanager-rknn-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(directory, "model.onnx"), Array.Empty<byte>());
+            var selector = new ModelRuntimeSelector(new ModelOptions(ModelBackend.Rknn, directory));
+
+            using var engine = Assert.IsType<RknnInferenceEngine>(selector.Create("model.onnx", 0.5));
+            using var tensor = new NativeFloatTensor(1);
+            var output = await engine.RunAsync(
+                new InferenceInput("test", tensor, new[] { 1, 1, 1, 1 }, 1, 1),
+                CancellationToken.None);
+
+            Assert.Equal("rknn:model.rknn:model_missing", output.Labels.Single());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InferenceOutputParser_DecodesYuNetOutputsFromUnifiedEngine()
+    {
+        const int anchors = 80 * 80;
+        const int anchorX = 20;
+        const int anchorY = 10;
+        var anchorIndex = anchorY * 80 + anchorX;
+        var cls = new float[anchors];
+        var obj = new float[anchors];
+        var bbox = new float[anchors * 4];
+        cls[anchorIndex] = 1.0f;
+        obj[anchorIndex] = 1.0f;
+        bbox[anchorIndex * 4] = 0.5f;
+        bbox[anchorIndex * 4 + 1] = 0.5f;
+        bbox[anchorIndex * 4 + 2] = MathF.Log(4.0f);
+        bbox[anchorIndex * 4 + 3] = MathF.Log(4.0f);
+
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("face", tensor, new[] { 1, 3, 640, 640 }, 1280, 720);
+        var outputs = new[]
+        {
+            new InferenceRawTensor("cls_8", new[] { 1, anchors, 1 }, cls),
+            new InferenceRawTensor("obj_8", new[] { 1, anchors, 1 }, obj),
+            new InferenceRawTensor("bbox_8", new[] { 1, anchors, 4 }, bbox)
+        };
+
+        var output = new InferenceOutputParser(0.6, Array.Empty<string>()).Parse(outputs, input, "rknn");
+
+        var detection = Assert.Single(output.Detections!);
+        Assert.Equal("face", detection.Label);
+        Assert.Equal(1.0, detection.Confidence, 6);
+        Assert.Equal(0.23125, detection.X, 6);
+        Assert.Equal(0.10625, detection.Y, 6);
+        Assert.Equal(0.05, detection.Width, 6);
+        Assert.Equal(0.05, detection.Height, 6);
+    }
 }

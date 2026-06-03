@@ -1,4 +1,5 @@
 using RideManager.Camera;
+using RideManager.Models;
 using RideManager.Utils;
 using Xunit;
 
@@ -53,6 +54,48 @@ public sealed class CameraPipelineFactoryTests
         var preprocessor = CameraPipelineFactory.CreateFramePreprocessor(options);
 
         Assert.IsType<FacePipelineFramePreprocessor>(preprocessor);
+    }
+
+    [Fact]
+    public void CreateAnalyzer_UsesRknnWrapperForYuNetAndPfldWhenTomlBackendIsRknn()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [models]
+            backend = "rknn"
+            directory = "models"
+
+            [[cameras]]
+            id = "CAM_FACE"
+            enabled = true
+            device = "synthetic"
+            model = "pfld_lite.onnx"
+            width = 640
+            height = 480
+            input_width = 112
+            input_height = 112
+            fps = 10
+            confidence_threshold = 0.60
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+            var options = Assert.Single(config.Cameras);
+            var selector = new ModelRuntimeSelector(config.Models);
+            var landmarkEngine = selector.Create(options.ModelName, options.ConfidenceThreshold);
+
+            using var analyzer = Assert.IsType<FaceCameraAnalyzer>(
+                CameraPipelineFactory.CreateAnalyzer(options, selector, landmarkEngine));
+
+            Assert.IsType<RknnInferenceEngine>(analyzer.FaceDetectorEngine);
+            Assert.IsType<RknnInferenceEngine>(analyzer.LandmarkEngine);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
     }
 
     private static CameraOptions CreateCamera(CameraId id, bool enabled)

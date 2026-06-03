@@ -6,7 +6,9 @@ namespace RideManager.Models;
 internal sealed class InferenceOutputParser
 {
     private const double NmsIouThreshold = 0.45;
+    private const double YuNetNmsIouThreshold = 0.3;
     private const int MaxDetections = 50;
+    private static readonly int[] YuNetStrides = { 8, 16, 32 };
     private static readonly string[] CocoLabels =
     {
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
@@ -45,10 +47,21 @@ internal sealed class InferenceOutputParser
         var segmentationMasks = new List<InferenceSegmentationMask>();
         IReadOnlyList<InferenceLandmark>? landmarks = null;
         var recognizedDetectionOutput = false;
+        var yunetDetections = TryParseYuNetDetections(outputs, input);
+        if (yunetDetections is not null)
+        {
+            recognizedDetectionOutput = true;
+            detections.AddRange(yunetDetections);
+        }
 
         foreach (var output in outputs)
         {
             if (output.Values.Length == 0)
+            {
+                continue;
+            }
+
+            if (IsYuNetOutput(output.Name))
             {
                 continue;
             }
@@ -107,6 +120,194 @@ internal sealed class InferenceOutputParser
         }
 
         return new InferenceOutput(new[] { $"{backendName}:{outputName}" }, Math.Clamp(best, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 解析 YuNet 的 cls/obj/bbox 多尺度输出，返回归一化人脸框。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection>? TryParseYuNetDetections(
+        IReadOnlyList<InferenceRawTensor> outputs,
+        InferenceInput input)
+    {
+        var tensors = outputs.ToDictionary(output => output.Name, StringComparer.OrdinalIgnoreCase);
+        if (!tensors.Keys.Any(IsYuNetOutput))
+        {
+            return null;
+        }
+
+        if (!TryGetNchwImageSize(input.TensorDimensions, out var inputWidth, out var inputHeight))
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
+        var detections = new List<InferenceDetection>();
+        foreach (var stride in YuNetStrides)
+        {
+            if (!tensors.TryGetValue($"cls_{stride}", out var cls)
+                || !tensors.TryGetValue($"obj_{stride}", out var obj)
+                || !tensors.TryGetValue($"bbox_{stride}", out var bbox))
+            {
+                continue;
+            }
+
+            DecodeYuNetStride(cls, obj, bbox, stride, inputWidth, inputHeight, detections);
+        }
+
+        return ApplyNms(detections, YuNetNmsIouThreshold);
+    }
+
+    /// <summary>
+    /// 解码 YuNet 单个 stride 输出。
+    /// </summary>
+    private void DecodeYuNetStride(
+        InferenceRawTensor cls,
+        InferenceRawTensor obj,
+        InferenceRawTensor bbox,
+        int stride,
+        int inputWidth,
+        int inputHeight,
+        List<InferenceDetection> detections)
+    {
+        if (!TryGetYuNetLayout(cls.Dimensions, stride, inputWidth, inputHeight, out var layout))
+        {
+            return;
+        }
+
+        for (var y = 0; y < layout.Height; y++)
+        {
+            for (var x = 0; x < layout.Width; x++)
+            {
+                var clsScore = NormalizeScore(ReadYuNetValue(cls.Values, layout, 1, 0, y, x));
+                var objScore = NormalizeScore(ReadYuNetValue(obj.Values, layout, 1, 0, y, x));
+                var confidence = Math.Sqrt(clsScore * objScore);
+                if (confidence < _confidenceThreshold)
+                {
+                    continue;
+                }
+
+                var centerX = (x + ReadYuNetValue(bbox.Values, layout, 4, 0, y, x)) * stride;
+                var centerY = (y + ReadYuNetValue(bbox.Values, layout, 4, 1, y, x)) * stride;
+                var width = Math.Exp(ReadYuNetValue(bbox.Values, layout, 4, 2, y, x)) * stride;
+                var height = Math.Exp(ReadYuNetValue(bbox.Values, layout, 4, 3, y, x)) * stride;
+                var left = Math.Clamp((centerX - width / 2.0) / inputWidth, 0.0, 1.0);
+                var top = Math.Clamp((centerY - height / 2.0) / inputHeight, 0.0, 1.0);
+                var right = Math.Clamp((centerX + width / 2.0) / inputWidth, 0.0, 1.0);
+                var bottom = Math.Clamp((centerY + height / 2.0) / inputHeight, 0.0, 1.0);
+                if (right <= left || bottom <= top)
+                {
+                    continue;
+                }
+
+                detections.Add(new InferenceDetection("face", confidence, left, top, right - left, bottom - top));
+            }
+        }
+    }
+
+    /// <summary>
+    /// 判断输出名是否属于 YuNet 的多尺度检测头。
+    /// </summary>
+    private static bool IsYuNetOutput(string outputName)
+    {
+        return YuNetStrides.Any(stride =>
+            outputName.Equals($"cls_{stride}", StringComparison.OrdinalIgnoreCase)
+            || outputName.Equals($"obj_{stride}", StringComparison.OrdinalIgnoreCase)
+            || outputName.Equals($"bbox_{stride}", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 从 NCHW 输入维度读取图像尺寸。
+    /// </summary>
+    private static bool TryGetNchwImageSize(IReadOnlyList<int> dimensions, out int width, out int height)
+    {
+        if (dimensions.Count == 4 && dimensions[2] > 0 && dimensions[3] > 0)
+        {
+            width = dimensions[3];
+            height = dimensions[2];
+            return true;
+        }
+
+        width = 0;
+        height = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// 读取 YuNet 输出张量中的单个值。
+    /// </summary>
+    private static float ReadYuNetValue(
+        float[] values,
+        YuNetLayout layout,
+        int channels,
+        int channel,
+        int y,
+        int x)
+    {
+        var index = y * layout.Width + x;
+        return layout.Kind switch
+        {
+            YuNetLayoutKind.ChannelFirst3D => values[channel * layout.AnchorCount + index],
+            YuNetLayoutKind.ChannelLast4D => values[(y * layout.Width + x) * channels + channel],
+            YuNetLayoutKind.ChannelFirst4D => values[channel * layout.AnchorCount + index],
+            _ => values[index * channels + channel]
+        };
+    }
+
+    /// <summary>
+    /// 根据输出张量维度识别 YuNet 单层布局。
+    /// </summary>
+    private static bool TryGetYuNetLayout(
+        IReadOnlyList<int> dimensions,
+        int stride,
+        int inputWidth,
+        int inputHeight,
+        out YuNetLayout layout)
+    {
+        var expectedWidth = inputWidth / stride;
+        var expectedHeight = inputHeight / stride;
+        var expectedAnchors = expectedWidth * expectedHeight;
+
+        if (dimensions.Count == 3 && dimensions[0] == 1)
+        {
+            if (dimensions[1] == expectedAnchors)
+            {
+                layout = new YuNetLayout(YuNetLayoutKind.ChannelLast3D, expectedWidth, expectedHeight, expectedAnchors);
+                return true;
+            }
+
+            if (dimensions[2] == expectedAnchors)
+            {
+                layout = new YuNetLayout(YuNetLayoutKind.ChannelFirst3D, expectedWidth, expectedHeight, expectedAnchors);
+                return true;
+            }
+        }
+
+        if (dimensions.Count == 4 && dimensions[0] == 1)
+        {
+            if (dimensions[2] == expectedHeight && dimensions[3] == expectedWidth)
+            {
+                layout = new YuNetLayout(YuNetLayoutKind.ChannelFirst4D, expectedWidth, expectedHeight, expectedAnchors);
+                return true;
+            }
+
+            if (dimensions[1] == expectedHeight && dimensions[2] == expectedWidth)
+            {
+                layout = new YuNetLayout(YuNetLayoutKind.ChannelLast4D, expectedWidth, expectedHeight, expectedAnchors);
+                return true;
+            }
+        }
+
+        layout = default;
+        return false;
+    }
+
+    /// <summary>
+    /// 兼容概率输出和少数未 Sigmoid 的分数输出。
+    /// </summary>
+    private static double NormalizeScore(float value)
+    {
+        return value is >= 0.0f and <= 1.0f
+            ? value
+            : 1.0 / (1.0 + Math.Exp(-value));
     }
 
     /// <summary>
@@ -495,12 +696,14 @@ internal sealed class InferenceOutputParser
     /// <summary>
     /// 对检测框执行基础非极大值抑制。
     /// </summary>
-    private static IReadOnlyList<InferenceDetection> ApplyNms(IReadOnlyList<InferenceDetection> detections)
+    private static IReadOnlyList<InferenceDetection> ApplyNms(
+        IReadOnlyList<InferenceDetection> detections,
+        double iouThreshold = NmsIouThreshold)
     {
         var selected = new List<InferenceDetection>();
         foreach (var detection in detections.OrderByDescending(detection => detection.Confidence))
         {
-            if (selected.Any(existing => existing.Label == detection.Label && IoU(existing, detection) > NmsIouThreshold))
+            if (selected.Any(existing => existing.Label == detection.Label && IoU(existing, detection) > iouThreshold))
             {
                 continue;
             }
@@ -513,6 +716,22 @@ internal sealed class InferenceOutputParser
         }
 
         return selected;
+    }
+
+    /// <summary>
+    /// 表示 YuNet 输出张量排布。
+    /// </summary>
+    private readonly record struct YuNetLayout(YuNetLayoutKind Kind, int Width, int Height, int AnchorCount);
+
+    /// <summary>
+    /// 表示 YuNet 输出张量排布类型。
+    /// </summary>
+    private enum YuNetLayoutKind
+    {
+        ChannelLast3D,
+        ChannelFirst3D,
+        ChannelLast4D,
+        ChannelFirst4D
     }
 
     /// <summary>

@@ -1,6 +1,4 @@
 using OpenCvSharp;
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using RideManager.Models;
 
 namespace RideManager.Camera;
@@ -10,40 +8,42 @@ namespace RideManager.Camera;
 /// </summary>
 public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
 {
-    private const string FaceDetectorModelName = "face_detection_yunet_2023mar.onnx";
+    internal const string FaceDetectorModelName = "face_detection_yunet_2023mar.onnx";
     private const int YuNetInputWidth = 640;
     private const int YuNetInputHeight = 640;
     private const double FaceCropScale = 1.25;
-    private const double NmsThreshold = 0.3;
-    private static readonly int[] YuNetStrides = { 8, 16, 32 };
 
     private readonly CameraId _cameraId;
+    private readonly IInferenceEngine _faceDetectorEngine;
     private readonly IInferenceEngine _landmarkEngine;
-    private readonly string _faceDetectorPath;
     private readonly int _landmarkInputWidth;
     private readonly int _landmarkInputHeight;
-    private readonly float _faceScoreThreshold;
-    private readonly object _faceDetectorGate = new();
-    private InferenceSession? _faceDetectorSession;
-    private string? _faceDetectorLoadError;
+
+    /// <summary>
+    /// 获取 YuNet 统一推理引擎，供链路测试确认后端选择。
+    /// </summary>
+    internal IInferenceEngine FaceDetectorEngine => _faceDetectorEngine;
+
+    /// <summary>
+    /// 获取 PFLD 统一推理引擎，供链路测试确认后端选择。
+    /// </summary>
+    internal IInferenceEngine LandmarkEngine => _landmarkEngine;
 
     /// <summary>
     /// 创建面部摄像头分析器。
     /// </summary>
     public FaceCameraAnalyzer(
         CameraId cameraId,
+        IInferenceEngine faceDetectorEngine,
         IInferenceEngine landmarkEngine,
-        string modelDirectory,
         int landmarkInputWidth,
-        int landmarkInputHeight,
-        double faceScoreThreshold)
+        int landmarkInputHeight)
     {
         _cameraId = cameraId;
+        _faceDetectorEngine = faceDetectorEngine;
         _landmarkEngine = landmarkEngine;
-        _faceDetectorPath = Path.Combine(modelDirectory, FaceDetectorModelName);
         _landmarkInputWidth = Math.Max(1, landmarkInputWidth);
         _landmarkInputHeight = Math.Max(1, landmarkInputHeight);
-        _faceScoreThreshold = (float)Math.Clamp(faceScoreThreshold, 0.0, 1.0);
     }
 
     /// <summary>
@@ -53,18 +53,14 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!File.Exists(_faceDetectorPath))
+        var faceResult = await DetectLargestFaceAsync(frame, cancellationToken);
+        if (faceResult.Face is null)
         {
-            return new[] { CreateStatusFinding($"yunet:{FaceDetectorModelName}:model_missing", frame.CapturedAt) };
+            return new[] { CreateStatusFinding(faceResult.StatusLabel, frame.CapturedAt) };
         }
 
-        var face = DetectLargestFace(frame.PreviewImage);
-        if (face is null)
-        {
-            return new[] { CreateStatusFinding($"yunet:{FaceDetectorModelName}:{_faceDetectorLoadError ?? "face_missing"}", frame.CapturedAt) };
-        }
-
-        using var faceCrop = CropFace(frame.PreviewImage, face.Value.Crop);
+        var face = faceResult.Face.Value;
+        using var faceCrop = CropFace(frame.PreviewImage, face.Crop);
         if (faceCrop.Empty())
         {
             return new[] { CreateStatusFinding("face_crop_empty", frame.CapturedAt) };
@@ -76,11 +72,11 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
                 _cameraId.ToString(),
                 landmarkTensor,
                 new[] { 1, 3, _landmarkInputHeight, _landmarkInputWidth },
-                (int)Math.Round(face.Value.Crop.Size),
-                (int)Math.Round(face.Value.Crop.Size)),
+                (int)Math.Round(face.Crop.Size),
+                (int)Math.Round(face.Crop.Size)),
             cancellationToken);
         var landmarks = (landmarkOutput.Landmarks ?? Array.Empty<InferenceLandmark>())
-            .Select(landmark => MapLandmarkToFrame(landmark, face.Value.Crop, frame.OriginalWidth, frame.OriginalHeight))
+            .Select(landmark => MapLandmarkToFrame(landmark, face.Crop, frame.OriginalWidth, frame.OriginalHeight))
             .ToArray();
         if (landmarks.Length == 0)
         {
@@ -93,16 +89,16 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
             new CameraFinding(
                 _cameraId,
                 "face_landmarks_106",
-                face.Value.Confidence,
+                face.Confidence,
                 frame.CapturedAt,
-                face.Value.Box,
+                face.Box,
                 Landmarks: landmarks),
             new CameraFinding(
                 _cameraId,
                 fatigue.Label,
                 fatigue.Confidence,
                 frame.CapturedAt,
-                face.Value.Box)
+                face.Box)
         };
     }
 
@@ -111,7 +107,11 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     /// </summary>
     public void Dispose()
     {
-        _faceDetectorSession?.Dispose();
+        if (_faceDetectorEngine is IDisposable faceDetectorDisposable)
+        {
+            faceDetectorDisposable.Dispose();
+        }
+
         if (_landmarkEngine is IDisposable disposable)
         {
             disposable.Dispose();
@@ -121,291 +121,40 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     /// <summary>
     /// 使用 YuNet 检测当前帧并选择面积最大的单张人脸。
     /// </summary>
-    private FaceDetection? DetectLargestFace(Mat image)
+    private async Task<FaceDetectionResult> DetectLargestFaceAsync(ProcessedFrame frame, CancellationToken cancellationToken)
     {
-        var session = GetFaceDetectorSession();
-        if (session is null)
-        {
-            return null;
-        }
-
         using var resized = new Mat();
-        Cv2.Resize(image, resized, new Size(YuNetInputWidth, YuNetInputHeight), 0, 0, InterpolationFlags.Linear);
+        Cv2.Resize(frame.PreviewImage, resized, new Size(YuNetInputWidth, YuNetInputHeight), 0, 0, InterpolationFlags.Linear);
         using var inputTensor = CreateYuNetInput(resized);
-        using var inputValue = FixedBufferOnnxValue.CreateFromMemory(
-            OrtMemoryInfo.DefaultInstance,
-            inputTensor.Memory,
-            TensorElementType.Float,
-            new long[] { 1, 3, YuNetInputHeight, YuNetInputWidth },
-            checked((long)inputTensor.Length * sizeof(float)));
-        using var results = session.Run(new[] { session.InputMetadata.Keys.First() }, new[] { inputValue });
-        var candidates = DecodeYuNetFaces(results, YuNetInputWidth, YuNetInputHeight, image.Width, image.Height);
-        var selected = ApplyNms(candidates).OrderByDescending(candidate => candidate.Area).ToArray();
-        return selected.Length == 0 ? null : selected[0];
-    }
-
-    /// <summary>
-    /// 获取 YuNet ONNX Runtime 会话。
-    /// </summary>
-    private InferenceSession? GetFaceDetectorSession()
-    {
-        if (_faceDetectorSession is not null || _faceDetectorLoadError is not null)
+        var output = await _faceDetectorEngine.RunAsync(
+            new InferenceInput(
+                _cameraId.ToString(),
+                inputTensor,
+                new[] { 1, 3, YuNetInputHeight, YuNetInputWidth },
+                frame.OriginalWidth,
+                frame.OriginalHeight),
+            cancellationToken);
+        var selected = (output.Detections ?? Array.Empty<InferenceDetection>())
+            .Where(detection => detection.Label.Equals("face", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(detection => detection.Width * detection.Height)
+            .FirstOrDefault();
+        if (selected is null)
         {
-            return _faceDetectorSession;
+            var statusLabel = output.Labels.FirstOrDefault()
+                ?? $"yunet:{FaceDetectorModelName}:face_missing";
+            return new FaceDetectionResult(null, statusLabel);
         }
 
-        lock (_faceDetectorGate)
-        {
-            if (_faceDetectorSession is not null || _faceDetectorLoadError is not null)
-            {
-                return _faceDetectorSession;
-            }
-
-            try
-            {
-                var sessionOptions = new SessionOptions
-                {
-                    GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                    ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-                    LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR,
-                    InterOpNumThreads = 1,
-                    IntraOpNumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 4)
-                };
-                _faceDetectorSession = new InferenceSession(_faceDetectorPath, sessionOptions);
-            }
-            catch (Exception ex) when (ex is OnnxRuntimeException or DllNotFoundException or BadImageFormatException)
-            {
-                _faceDetectorLoadError = ex.GetType().Name;
-            }
-
-            return _faceDetectorSession;
-        }
-    }
-
-    /// <summary>
-    /// 从 YuNet 原始输出中解码人脸候选框。
-    /// </summary>
-    private IReadOnlyList<FaceDetection> DecodeYuNetFaces(
-        IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results,
-        int inputWidth,
-        int inputHeight,
-        int frameWidth,
-        int frameHeight)
-    {
-        var tensors = results
-            .Where(result => result.Value is Tensor<float>)
-            .ToDictionary(result => result.Name, result => (Tensor<float>)result.Value, StringComparer.OrdinalIgnoreCase);
-        var detections = new List<FaceDetection>();
-
-        foreach (var stride in YuNetStrides)
-        {
-            if (!tensors.TryGetValue($"cls_{stride}", out var cls)
-                || !tensors.TryGetValue($"obj_{stride}", out var obj)
-                || !tensors.TryGetValue($"bbox_{stride}", out var bbox))
-            {
-                continue;
-            }
-
-            DecodeYuNetStride(cls, obj, bbox, stride, inputWidth, inputHeight, frameWidth, frameHeight, detections);
-        }
-
-        return detections;
-    }
-
-    /// <summary>
-    /// 解码 YuNet 单个 stride 层的候选框。
-    /// </summary>
-    private void DecodeYuNetStride(
-        Tensor<float> cls,
-        Tensor<float> obj,
-        Tensor<float> bbox,
-        int stride,
-        int inputWidth,
-        int inputHeight,
-        int frameWidth,
-        int frameHeight,
-        List<FaceDetection> detections)
-    {
-        if (!TryGetYuNetLayout(cls, stride, inputWidth, inputHeight, out var layout))
-        {
-            return;
-        }
-
-        var clsValues = cls.ToArray();
-        var objValues = obj.ToArray();
-        var bboxValues = bbox.ToArray();
-
-        for (var y = 0; y < layout.Height; y++)
-        {
-            for (var x = 0; x < layout.Width; x++)
-            {
-                var clsScore = NormalizeScore(ReadYuNetValue(clsValues, layout, 1, 0, y, x));
-                var objScore = NormalizeScore(ReadYuNetValue(objValues, layout, 1, 0, y, x));
-                var confidence = Math.Sqrt(clsScore * objScore);
-                if (confidence < _faceScoreThreshold)
-                {
-                    continue;
-                }
-
-                var centerX = (x + ReadYuNetValue(bboxValues, layout, 4, 0, y, x)) * stride;
-                var centerY = (y + ReadYuNetValue(bboxValues, layout, 4, 1, y, x)) * stride;
-                var width = Math.Exp(ReadYuNetValue(bboxValues, layout, 4, 2, y, x)) * stride;
-                var height = Math.Exp(ReadYuNetValue(bboxValues, layout, 4, 3, y, x)) * stride;
-                var left = centerX - width / 2.0;
-                var top = centerY - height / 2.0;
-                var right = centerX + width / 2.0;
-                var bottom = centerY + height / 2.0;
-                AddYuNetDetection(left, top, right, bottom, confidence, inputWidth, inputHeight, frameWidth, frameHeight, detections);
-            }
-        }
-    }
-
-    /// <summary>
-    /// 加入一个裁剪到图像范围内的 YuNet 检测框。
-    /// </summary>
-    private static void AddYuNetDetection(
-        double x1,
-        double y1,
-        double x2,
-        double y2,
-        double confidence,
-        int inputWidth,
-        int inputHeight,
-        int frameWidth,
-        int frameHeight,
-        List<FaceDetection> detections)
-    {
-        var scaleX = (double)frameWidth / inputWidth;
-        var scaleY = (double)frameHeight / inputHeight;
-        var left = Math.Clamp(x1 * scaleX, 0, Math.Max(0, frameWidth - 1));
-        var top = Math.Clamp(y1 * scaleY, 0, Math.Max(0, frameHeight - 1));
-        var right = Math.Clamp(x2 * scaleX, 0, frameWidth);
-        var bottom = Math.Clamp(y2 * scaleY, 0, frameHeight);
-        if (right <= left || bottom <= top)
-        {
-            return;
-        }
-
-        var boxWidth = right - left;
-        var boxHeight = bottom - top;
-        detections.Add(new FaceDetection(
-            new CameraBoundingBox(left / frameWidth, top / frameHeight, boxWidth / frameWidth, boxHeight / frameHeight),
-            CreateSquareCrop(left, top, boxWidth, boxHeight),
-            confidence,
-            boxWidth * boxHeight));
-    }
-
-    /// <summary>
-    /// 对 YuNet 候选框执行 NMS。
-    /// </summary>
-    private static IReadOnlyList<FaceDetection> ApplyNms(IReadOnlyList<FaceDetection> detections)
-    {
-        var selected = new List<FaceDetection>();
-        foreach (var detection in detections.OrderByDescending(detection => detection.Confidence))
-        {
-            if (selected.Any(existing => IoU(existing.Box, detection.Box) > NmsThreshold))
-            {
-                continue;
-            }
-
-            selected.Add(detection);
-        }
-
-        return selected;
-    }
-
-    /// <summary>
-    /// 计算两个归一化框的交并比。
-    /// </summary>
-    private static double IoU(CameraBoundingBox first, CameraBoundingBox second)
-    {
-        var left = Math.Max(first.X, second.X);
-        var top = Math.Max(first.Y, second.Y);
-        var right = Math.Min(first.X + first.Width, second.X + second.Width);
-        var bottom = Math.Min(first.Y + first.Height, second.Y + second.Height);
-        var intersection = Math.Max(0, right - left) * Math.Max(0, bottom - top);
-        var union = first.Width * first.Height + second.Width * second.Height - intersection;
-        return union <= 0 ? 0 : intersection / union;
-    }
-
-    /// <summary>
-    /// 读取 YuNet 输出张量中的单个值，兼容 [1,N,C]、[1,C,N]、NCHW 和 NHWC。
-    /// </summary>
-    private static float ReadYuNetValue(
-        float[] values,
-        YuNetLayout layout,
-        int channels,
-        int channel,
-        int y,
-        int x)
-    {
-        var index = y * layout.Width + x;
-        return layout.Kind switch
-        {
-            YuNetLayoutKind.ChannelFirst3D => values[channel * layout.AnchorCount + index],
-            YuNetLayoutKind.ChannelLast4D => values[(y * layout.Width + x) * channels + channel],
-            YuNetLayoutKind.ChannelFirst4D => values[channel * layout.AnchorCount + index],
-            _ => values[index * channels + channel]
-        };
-    }
-
-    /// <summary>
-    /// 根据输出张量维度识别 YuNet 单层布局。
-    /// </summary>
-    private static bool TryGetYuNetLayout(
-        Tensor<float> tensor,
-        int stride,
-        int inputWidth,
-        int inputHeight,
-        out YuNetLayout layout)
-    {
-        var expectedWidth = inputWidth / stride;
-        var expectedHeight = inputHeight / stride;
-        var expectedAnchors = expectedWidth * expectedHeight;
-        var dims = tensor.Dimensions.ToArray();
-
-        if (dims.Length == 3 && dims[0] == 1)
-        {
-            if (dims[1] == expectedAnchors)
-            {
-                layout = new YuNetLayout(YuNetLayoutKind.ChannelLast3D, expectedWidth, expectedHeight, expectedAnchors);
-                return true;
-            }
-
-            if (dims[2] == expectedAnchors)
-            {
-                layout = new YuNetLayout(YuNetLayoutKind.ChannelFirst3D, expectedWidth, expectedHeight, expectedAnchors);
-                return true;
-            }
-        }
-
-        if (dims.Length == 4 && dims[0] == 1)
-        {
-            if (dims[2] == expectedHeight && dims[3] == expectedWidth)
-            {
-                layout = new YuNetLayout(YuNetLayoutKind.ChannelFirst4D, expectedWidth, expectedHeight, expectedAnchors);
-                return true;
-            }
-
-            if (dims[1] == expectedHeight && dims[2] == expectedWidth)
-            {
-                layout = new YuNetLayout(YuNetLayoutKind.ChannelLast4D, expectedWidth, expectedHeight, expectedAnchors);
-                return true;
-            }
-        }
-
-        layout = default;
-        return false;
-    }
-
-    /// <summary>
-    /// 兼容概率输出和少数未 Sigmoid 的分数输出。
-    /// </summary>
-    private static double NormalizeScore(float value)
-    {
-        return value is >= 0.0f and <= 1.0f
-            ? value
-            : 1.0 / (1.0 + Math.Exp(-value));
+        var left = selected.X * frame.OriginalWidth;
+        var top = selected.Y * frame.OriginalHeight;
+        var width = selected.Width * frame.OriginalWidth;
+        var height = selected.Height * frame.OriginalHeight;
+        return new FaceDetectionResult(
+            new FaceDetection(
+                new CameraBoundingBox(selected.X, selected.Y, selected.Width, selected.Height),
+                CreateSquareCrop(left, top, width, height),
+                selected.Confidence),
+            string.Empty);
     }
 
     /// <summary>
@@ -542,26 +291,16 @@ public sealed class FaceCameraAnalyzer : ICameraAnalyzer, IDisposable
     /// <summary>
     /// 表示 YuNet 最大人脸检测结果。
     /// </summary>
-    private readonly record struct FaceDetection(CameraBoundingBox Box, FaceCrop Crop, double Confidence, double Area);
+    private readonly record struct FaceDetection(CameraBoundingBox Box, FaceCrop Crop, double Confidence);
+
+    /// <summary>
+    /// 表示 YuNet 检测结果或可展示的诊断状态。
+    /// </summary>
+    private readonly record struct FaceDetectionResult(FaceDetection? Face, string StatusLabel);
 
     /// <summary>
     /// 表示可越界的正方形人脸裁剪区域。
     /// </summary>
     private readonly record struct FaceCrop(double Left, double Top, double Size);
 
-    /// <summary>
-    /// 表示 YuNet 输出张量排布。
-    /// </summary>
-    private readonly record struct YuNetLayout(YuNetLayoutKind Kind, int Width, int Height, int AnchorCount);
-
-    /// <summary>
-    /// 表示 YuNet 输出张量排布类型。
-    /// </summary>
-    private enum YuNetLayoutKind
-    {
-        ChannelLast3D,
-        ChannelFirst3D,
-        ChannelLast4D,
-        ChannelFirst4D
-    }
 }

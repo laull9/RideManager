@@ -42,7 +42,7 @@ YuNet 示例来源：
 
 - `docs/examples/yunet_demo.py`
 
-YuNet 在 C# 侧通过 `Microsoft.ML.OnnxRuntime` 直接运行，不依赖 OpenCvSharp `FaceDetectorYN`。当前 `face_detection_yunet_2023mar.onnx` 为固定 `640x640` 输入，C# 会先把整帧 resize 到 `640x640`，再将检测框映射回原始 CAM_FACE 帧。
+YuNet 在 C# 侧通过统一的 `IInferenceEngine` 包装层运行，不依赖 OpenCvSharp `FaceDetectorYN`。当前 `face_detection_yunet_2023mar.onnx` 为固定 `640x640` 输入，C# 会先把整帧 resize 到 `640x640`，再将检测框映射回原始 CAM_FACE 帧；`[models].backend = "rknn"` 时会自动使用同名 `.rknn` 模型。
 
 OpenCV demo 封装后的 YuNet 输出格式为每行 15 个值：
 
@@ -59,26 +59,26 @@ nose_x, nose_y, right_mouth_x, right_mouth_y, left_mouth_x, left_mouth_y, score
 
 - `config.toml` 中 `CAM_FACE` 已切换为 `model = "pfld_lite.onnx"`。
 - `CAM_FACE` 的 `input_width/input_height` 已设为 `112x112`。
-- 默认仍保持 `enabled = false`，live test 可通过 `--camera CAM_FACE --source ...` 临时启用面部摄像头链路。
+- live test 可通过 `--camera CAM_FACE --source ...` 临时覆盖面部摄像头输入。
 
 运行时：
 
 - `src/camera/FacePipelineFramePreprocessor.cs`
   - CAM_FACE 两阶段链路使用整帧占位预处理，保留原始画面给 YuNet。
 - `src/camera/FaceCameraAnalyzer.cs`
-  - 先使用 `models/face_detection_yunet_2023mar.onnx` 对整帧做人脸检测。
-  - 使用 C# ONNX Runtime 解码 YuNet 的 `cls/obj/bbox` stride 输出，box 公式与 OpenCV `FaceDetectorYN` 官方实现保持一致：`cx=(col+dx)*stride`、`cy=(row+dy)*stride`、`w=exp(dw)*stride`、`h=exp(dh)*stride`。
-  - 兼容 `2023mar` ONNX 常见的 `[1,N,C]` 输出排布。
+  - 先使用 `face_detection_yunet_2023mar.onnx/.rknn` 对整帧做人脸检测。
   - 只保留面积最大的单张人脸。
   - 将人脸框扩张为正方形 ROI，越界部分补黑边。
-  - 把 ROI resize 到 `112x112` 后送入 `pfld_lite.onnx`。
+  - 把 ROI resize 到 `112x112` 后送入 `pfld_lite.onnx/.rknn`。
   - 将 PFLD 关键点从 ROI 坐标映射回整帧归一化坐标。
 - `src/camera/FaceFatigueEstimator.cs`
   - 基于 106 点中左右眼上下眼睑与眼角距离估算单帧眼部开合度。
   - 输出 `fatigue` 或 `fatigue_normal`。
 - `src/camera/CameraPipelineFactory.cs`
   - 根据模型文件名包含 `pfld` 自动选择面部两阶段链路。
-- `src/models/OnnxInferenceEngine.cs`
+- `src/models/InferenceOutputParser.cs`
+  - 解码 YuNet 的 `cls/obj/bbox` stride 输出，box 公式与 OpenCV `FaceDetectorYN` 官方实现保持一致：`cx=(col+dx)*stride`、`cy=(row+dy)*stride`、`w=exp(dw)*stride`、`h=exp(dh)*stride`。
+  - 兼容 YuNet 常见的 `[1,N,C]`、`[1,C,N]`、NCHW 和 NHWC 输出排布。
   - 识别 `[1, 212]` / `[212]` 的 PFLD 关键点输出。
   - 生成 `InferenceLandmark` 列表。
   - 根据关键点外接范围生成一条 `face_landmarks_106` finding，便于统一显示和数据库 payload 存储。
@@ -140,4 +140,4 @@ FATIGUE NORMAL 91%
 ## 注意事项
 
 - 当前疲劳判断是单帧眼部开合度规则，适合作为 live 链路和数据闭环的第一版；稳定量产前建议加入时间窗口/PERCLOS、打哈欠和头部姿态规则。
-- RK3588 部署时可基于 `models/pfld_lite.onnx` 转 RKNN，保持输入 `112x112 BGR NCHW / 255` 和输出 `106 x 2` 语义一致。
+- RK3588 部署时运行 `python3 scripts/convert_project_onnx_to_rknn.py`，可一次转换当前全部具体 ONNX 模型。YuNet 保持 `640x640 BGR NCHW` 原始数值输入，PFLD 保持 `112x112 BGR NCHW / 255` 输入和 `106 x 2` 输出语义。
