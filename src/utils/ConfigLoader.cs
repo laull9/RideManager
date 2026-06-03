@@ -73,7 +73,8 @@ public static class ConfigLoader
             value.InputWidth,
             value.InputHeight,
             value.Fps,
-            Math.Clamp(value.ConfidenceThreshold, 0.0, 1.0));
+            Math.Clamp(value.ConfidenceThreshold, 0.0, 1.0),
+            value.PixelFormat);
     }
 
     /// <summary>
@@ -211,6 +212,8 @@ public static class ConfigLoader
         public int Fps { get; set; } = 30;
 
         public double ConfidenceThreshold { get; set; } = 0.25;
+
+        public string PixelFormat { get; set; } = "MJPG";
     }
 
     /// <summary>

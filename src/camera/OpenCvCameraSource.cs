@@ -18,6 +18,7 @@ public sealed class OpenCvCameraSource : ICameraSource
     private readonly Task _captureTask;
     private CameraFrame? _latestFrame;
     private long _droppedFrames;
+    private long _consecutiveReadFailures;
 
     /// <summary>
     /// 创建 OpenCV 摄像头源并启动后台采集循环。
@@ -35,6 +36,7 @@ public sealed class OpenCvCameraSource : ICameraSource
             throw new InvalidOperationException($"Failed to open camera device: {options.Device}");
         }
 
+        ReportCaptureConfiguration(_capture, options);
         _replayFrameInterval = GetReplayFrameInterval(_capture, options);
         _captureTask = Task.Run(CaptureLoopAsync);
     }
@@ -96,6 +98,7 @@ public sealed class OpenCvCameraSource : ICameraSource
             if (!_capture.Read(image) || image.Empty())
             {
                 image.Dispose();
+                ReportReadFailure();
                 if (_isReplaySource)
                 {
                     LoopReplaySource();
@@ -105,6 +108,7 @@ public sealed class OpenCvCameraSource : ICameraSource
                 continue;
             }
 
+            Interlocked.Exchange(ref _consecutiveReadFailures, 0);
             var frame = new CameraFrame(_options.Id, DateTimeOffset.UtcNow, image);
             lock (_gate)
             {
@@ -144,10 +148,47 @@ public sealed class OpenCvCameraSource : ICameraSource
             return;
         }
 
+        if (TryGetPixelFormat(options.PixelFormat, out var pixelFormat))
+        {
+            capture.Set(VideoCaptureProperties.FourCC, pixelFormat);
+        }
+
         capture.Set(VideoCaptureProperties.FrameWidth, options.Width);
         capture.Set(VideoCaptureProperties.FrameHeight, options.Height);
         capture.Set(VideoCaptureProperties.Fps, options.Fps);
         capture.Set(VideoCaptureProperties.BufferSize, 1);
+    }
+
+    /// <summary>
+    /// 打印摄像头实际协商到的后端、像素格式、分辨率和帧率。
+    /// </summary>
+    private static void ReportCaptureConfiguration(VideoCapture capture, CameraOptions options)
+    {
+        if (IsReplaySource(options.Device))
+        {
+            return;
+        }
+
+        var backend = (VideoCaptureAPIs)(int)capture.Get(VideoCaptureProperties.Backend);
+        var pixelFormat = FormatFourCc((int)capture.Get(VideoCaptureProperties.FourCC));
+        var width = capture.Get(VideoCaptureProperties.FrameWidth);
+        var height = capture.Get(VideoCaptureProperties.FrameHeight);
+        var fps = capture.Get(VideoCaptureProperties.Fps);
+        Console.WriteLine(
+            $"Camera {options.Id} opened device={options.Device} backend={backend} requested_pixel_format={options.PixelFormat} pixel_format={pixelFormat} size={width:F0}x{height:F0} fps={fps:F1}");
+    }
+
+    /// <summary>
+    /// 在首次和周期性读取失败时输出带摄像头标识的诊断信息。
+    /// </summary>
+    private void ReportReadFailure()
+    {
+        var failures = Interlocked.Increment(ref _consecutiveReadFailures);
+        if (failures == 1 || failures % 10 == 0)
+        {
+            Console.WriteLine(
+                $"Camera {_options.Id} read failed device={_options.Device} consecutive_failures={failures}. Check V4L2 format and USB bandwidth.");
+        }
     }
 
     /// <summary>
@@ -197,6 +238,49 @@ public sealed class OpenCvCameraSource : ICameraSource
     private static bool IsReplaySource(string device)
     {
         return !TryParseDeviceIndex(device, out _) && File.Exists(device);
+    }
+
+    /// <summary>
+    /// 将配置中的四字符像素格式转换为 OpenCV FourCC；auto 表示由驱动协商。
+    /// </summary>
+    internal static bool TryGetPixelFormat(string? value, out int pixelFormat)
+    {
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            pixelFormat = 0;
+            return false;
+        }
+
+        var normalized = value.Trim().ToUpperInvariant();
+        if (normalized.Length != 4)
+        {
+            throw new InvalidOperationException(
+                $"Camera pixel_format must be a four-character code such as MJPG or YUYV, or auto: {value}");
+        }
+
+        pixelFormat = FourCC.FromString(normalized);
+        return true;
+    }
+
+    /// <summary>
+    /// 将 OpenCV FourCC 整数转换为可读的四字符文本。
+    /// </summary>
+    internal static string FormatFourCc(int value)
+    {
+        if (value == 0)
+        {
+            return "unknown";
+        }
+
+        Span<char> chars = stackalloc char[4];
+        for (var index = 0; index < chars.Length; index++)
+        {
+            var character = (char)((value >> (index * 8)) & 0xff);
+            chars[index] = char.IsControl(character) ? '?' : character;
+        }
+
+        return new string(chars);
     }
 
     /// <summary>

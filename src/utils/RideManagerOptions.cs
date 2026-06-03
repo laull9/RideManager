@@ -26,7 +26,8 @@ public sealed record CameraOptions(
     int InputWidth,
     int InputHeight,
     int Fps,
-    double ConfidenceThreshold);
+    double ConfidenceThreshold,
+    string PixelFormat = "MJPG");
 
 /// <summary>
 /// 表示推理运行时的配置。
