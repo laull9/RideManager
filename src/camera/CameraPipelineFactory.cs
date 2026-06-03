@@ -22,8 +22,11 @@ public static class CameraPipelineFactory
         IEnumerable<CameraOptions> cameraOptions,
         ModelRuntimeSelector runtimeSelector)
     {
-        return GetEnabledCameraOptionsInPreferredOrder(cameraOptions)
-            .Select(options => CreatePipeline(options, runtimeSelector))
+        var enabledOptions = GetEnabledCameraOptionsInPreferredOrder(cameraOptions);
+        var sources = CreateCameraSources(enabledOptions, CreateCameraSource);
+
+        return enabledOptions
+            .Select(options => CreatePipeline(options, sources[options.Id], runtimeSelector))
             .ToArray();
     }
 
@@ -80,14 +83,48 @@ public static class CameraPipelineFactory
     /// <summary>
     /// 创建单路摄像头的采集、预处理、推理分析链路。
     /// </summary>
-    private static CameraPipeline CreatePipeline(CameraOptions options, ModelRuntimeSelector runtimeSelector)
+    private static CameraPipeline CreatePipeline(
+        CameraOptions options,
+        ICameraSource source,
+        ModelRuntimeSelector runtimeSelector)
     {
         var inferenceEngine = runtimeSelector.Create(options.ModelName, options.ConfidenceThreshold);
         return new CameraPipeline(
             options.Id,
-            CreateCameraSource(options),
+            source,
             CreateFramePreprocessor(options),
             CreateAnalyzer(options, runtimeSelector, inferenceEngine));
+    }
+
+    /// <summary>
+    /// 为相同真实输入设备创建单个底层采集源，并向多条管线广播最新帧。
+    /// </summary>
+    internal static IReadOnlyDictionary<CameraId, ICameraSource> CreateCameraSources(
+        IReadOnlyList<CameraOptions> cameraOptions,
+        Func<CameraOptions, ICameraSource> sourceFactory)
+    {
+        var sources = new Dictionary<CameraId, ICameraSource>();
+        foreach (var group in cameraOptions.GroupBy(camera => camera.Device, StringComparer.OrdinalIgnoreCase))
+        {
+            var groupedOptions = group.ToArray();
+            if (groupedOptions.Length == 1 || IsSyntheticDevice(group.Key))
+            {
+                foreach (var options in groupedOptions)
+                {
+                    sources.Add(options.Id, sourceFactory(options));
+                }
+
+                continue;
+            }
+
+            var broadcastSource = new BroadcastCameraSource(sourceFactory(groupedOptions[0]));
+            foreach (var options in groupedOptions)
+            {
+                sources.Add(options.Id, broadcastSource.CreateReader(options.Id));
+            }
+        }
+
+        return sources;
     }
 
     /// <summary>

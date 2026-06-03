@@ -77,6 +77,33 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public async Task CreateCameraSources_OpensSharedPhysicalDeviceOnlyOnce()
+    {
+        var cameras = new[]
+        {
+            CreateCamera(CameraId.CamFront, enabled: true) with { Device = "/dev/video23" },
+            CreateCamera(CameraId.CamFace, enabled: true) with { Device = "/dev/video23" }
+        };
+        var createdSources = 0;
+
+        var sources = CameraPipelineFactory.CreateCameraSources(
+            cameras,
+            _ =>
+            {
+                createdSources++;
+                return new EmptyCameraSource();
+            });
+
+        Assert.Equal(1, createdSources);
+        Assert.Equal(2, sources.Count);
+
+        foreach (var source in sources.Values)
+        {
+            await source.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public void CreateFramePreprocessor_UsesFacePipelinePreprocessorForFaceLandmarkModel()
     {
         var options = CreateCamera(CameraId.CamFace, enabled: true) with
@@ -146,5 +173,21 @@ public sealed class CameraPipelineFactoryTests
             640,
             30,
             0.35);
+    }
+
+    private sealed class EmptyCameraSource : ICameraSource
+    {
+        public long DroppedFrames => 0;
+
+        public Task<CameraFrame?> ReadLatestAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<CameraFrame?>(null);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            return ValueTask.CompletedTask;
+        }
     }
 }
