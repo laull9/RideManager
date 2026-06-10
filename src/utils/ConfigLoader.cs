@@ -27,7 +27,8 @@ public static class ConfigLoader
             new ModelOptions(ParseBackend(config.Models.Backend), config.Models.Directory),
             new SensorOptions(ParseEndpoint(config.Sensors.Radar), ParseEndpoint(config.Sensors.Gyro)),
             new ActuatorOptions(ParseActuator(config.Actuators.Brake), ParseActuator(config.Actuators.Speaker)),
-            new DatabaseOptions(config.Database.ConnectionString));
+            new DatabaseOptions(config.Database.ConnectionString),
+            ParseAppSync(config.AppSync));
     }
 
     /// <summary>
@@ -55,7 +56,8 @@ public static class ConfigLoader
                 CreateDefaultRadarEndpoint(),
                 new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0)),
             new ActuatorOptions(new ActuatorEndpointOptions(false), new ActuatorEndpointOptions(false)),
-            new DatabaseOptions(string.Empty));
+            new DatabaseOptions(string.Empty),
+            CreateDefaultAppSyncOptions());
     }
 
     /// <summary>
@@ -182,6 +184,40 @@ public static class ConfigLoader
     }
 
     /// <summary>
+    /// 解析手机 App 同步配置。
+    /// </summary>
+    private static AppSyncOptions ParseAppSync(AppSyncToml value)
+    {
+        return new AppSyncOptions(
+            value.Enabled,
+            string.IsNullOrWhiteSpace(value.DeviceName) ? "RideManager" : value.DeviceName,
+            string.IsNullOrWhiteSpace(value.ServiceUuid) ? "7f7d0001-4f52-4d32-9b2a-0f0b5a8b1000" : value.ServiceUuid,
+            string.IsNullOrWhiteSpace(value.RxUuid) ? "7f7d0002-4f52-4d32-9b2a-0f0b5a8b1000" : value.RxUuid,
+            string.IsNullOrWhiteSpace(value.TxUuid) ? "7f7d0003-4f52-4d32-9b2a-0f0b5a8b1000" : value.TxUuid,
+            Math.Clamp(value.MaxPageSize, 1, 500),
+            Math.Clamp(value.DefaultSyncWindowHours, 1.0, 168.0),
+            Math.Clamp(value.NotifyChunkBytes, 64, 4096),
+            Math.Clamp(value.MaxRequestBytes, 512, 65536));
+    }
+
+    /// <summary>
+    /// 创建默认手机 App 同步配置。
+    /// </summary>
+    private static AppSyncOptions CreateDefaultAppSyncOptions()
+    {
+        return new AppSyncOptions(
+            true,
+            "RideManager",
+            "7f7d0001-4f52-4d32-9b2a-0f0b5a8b1000",
+            "7f7d0002-4f52-4d32-9b2a-0f0b5a8b1000",
+            "7f7d0003-4f52-4d32-9b2a-0f0b5a8b1000",
+            100,
+            24.0,
+            180,
+            16384);
+    }
+
+    /// <summary>
     /// 解析摄像头枚举值。
     /// </summary>
     private static CameraId ParseCameraId(string value)
@@ -221,6 +257,8 @@ public static class ConfigLoader
         public SensorsToml Sensors { get; set; } = new();
 
         public ActuatorsToml Actuators { get; set; } = new();
+
+        public AppSyncToml AppSync { get; set; } = new();
     }
 
     /// <summary>
@@ -354,5 +392,29 @@ public static class ConfigLoader
     private sealed class ActuatorEndpointToml
     {
         public bool Enabled { get; set; }
+    }
+
+    /// <summary>
+    /// 表示手机 App 同步配置节点。
+    /// </summary>
+    private sealed class AppSyncToml
+    {
+        public bool Enabled { get; set; } = true;
+
+        public string DeviceName { get; set; } = "RideManager";
+
+        public string ServiceUuid { get; set; } = string.Empty;
+
+        public string RxUuid { get; set; } = string.Empty;
+
+        public string TxUuid { get; set; } = string.Empty;
+
+        public int MaxPageSize { get; set; } = 100;
+
+        public double DefaultSyncWindowHours { get; set; } = 24.0;
+
+        public int NotifyChunkBytes { get; set; } = 180;
+
+        public int MaxRequestBytes { get; set; } = 16384;
     }
 }

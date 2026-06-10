@@ -11,7 +11,8 @@ public sealed record RideManagerOptions(
     ModelOptions Models,
     SensorOptions Sensors,
     ActuatorOptions Actuators,
-    DatabaseOptions Database);
+    DatabaseOptions Database,
+    AppSyncOptions AppSync);
 
 /// <summary>
 /// 表示单个摄像头链路的配置。
@@ -102,3 +103,17 @@ public sealed record ActuatorEndpointOptions(bool Enabled);
 /// 表示数据库连接配置。
 /// </summary>
 public sealed record DatabaseOptions(string ConnectionString);
+
+/// <summary>
+/// 表示手机 App 蓝牙同步服务配置。
+/// </summary>
+public sealed record AppSyncOptions(
+    bool Enabled,
+    string DeviceName,
+    string ServiceUuid,
+    string RxUuid,
+    string TxUuid,
+    int MaxPageSize,
+    double DefaultSyncWindowHours,
+    int NotifyChunkBytes,
+    int MaxRequestBytes);

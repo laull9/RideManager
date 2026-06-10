@@ -75,3 +75,14 @@ enabled = false
 
 [actuators.speaker]
 enabled = false
+
+[app_sync]
+enabled = true
+device_name = "RideManager"
+service_uuid = "7f7d0001-4f52-4d32-9b2a-0f0b5a8b1000"
+rx_uuid = "7f7d0002-4f52-4d32-9b2a-0f0b5a8b1000"
+tx_uuid = "7f7d0003-4f52-4d32-9b2a-0f0b5a8b1000"
+max_page_size = 100
+default_sync_window_hours = 24.0
+notify_chunk_bytes = 180
+max_request_bytes = 16384

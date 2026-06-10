@@ -1,4 +1,5 @@
 using RideManager.Actuators;
+using RideManager.AppSync;
 using RideManager.Camera;
 using RideManager.Core;
 using RideManager.Data;
@@ -9,6 +10,8 @@ using RideManager.Utils;
 var configPath = ReadOption(args, "--config") ?? "config.toml";
 var options = ConfigLoader.Load(configPath);
 var isCameraLiveTest = args.Contains("livetest", StringComparer.OrdinalIgnoreCase);
+var isAppSyncLiveTest = args.Contains("liveapp", StringComparer.OrdinalIgnoreCase)
+    || args.Contains("liveappsync", StringComparer.OrdinalIgnoreCase);
 
 if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
 {
@@ -19,6 +22,16 @@ if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
         ParsePort(ReadOption(args, "--port"), 5089));
 
     await new RadarLiveTester(options.Sensors.Radar).RunAsync(liveOptions, CancellationToken.None);
+    return;
+}
+
+if (isAppSyncLiveTest)
+{
+    var liveOptions = new AppSyncLiveTestOptions(
+        ParseDuration(ReadOption(args, "--duration")),
+        args.Contains("--require-database", StringComparer.OrdinalIgnoreCase));
+
+    await new AppSyncLiveTester(options.AppSync, options.Database).RunAsync(liveOptions, CancellationToken.None);
     return;
 }
 
@@ -49,6 +62,9 @@ if (isCameraLiveTest)
 }
 
 await using var radarReader = new RadarBluetoothReader(options.Sensors.Radar);
+await using var appSyncServer = new AppSyncServer(options.AppSync, options.Database);
+await appSyncServer.StartAsync(CancellationToken.None);
+
 var sensorReaders = new ISensorReader[]
 {
     radarReader,

@@ -1,0 +1,64 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace RideManager.AppSync;
+
+/// <summary>
+/// 提供手机 App 同步协议 JSON 序列化工具。
+/// </summary>
+internal static class AppSyncJson
+{
+    /// <summary>
+    /// 协议统一 JSON 选项。
+    /// </summary>
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false
+    };
+
+    /// <summary>
+    /// 将任意响应负载转换为可嵌入响应信封的 JsonElement。
+    /// </summary>
+    public static JsonElement ToElement<T>(T value)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(value, Options));
+        return document.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// 从 JSON 文档中读取字符串属性。
+    /// </summary>
+    public static string? GetString(JsonElement element, string name)
+    {
+        return element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out var property)
+            && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
+    }
+
+    /// <summary>
+    /// 从 JSON 文档中读取整数属性。
+    /// </summary>
+    public static int GetInt(JsonElement element, string name, int fallback)
+    {
+        return element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out var property)
+            && property.TryGetInt32(out var value)
+                ? value
+                : fallback;
+    }
+
+    /// <summary>
+    /// 从 JSON 文档中读取浮点属性。
+    /// </summary>
+    public static double GetDouble(JsonElement element, string name, double fallback)
+    {
+        return element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(name, out var property)
+            && property.TryGetDouble(out var value)
+                ? value
+                : fallback;
+    }
+}

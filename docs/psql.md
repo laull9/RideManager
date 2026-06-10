@@ -28,6 +28,7 @@ dotnet tool run dotnet-ef database update
 - 时间字段使用 `timestamp with time zone`，应用侧写入 UTC 时间。
 - 可变结构数据使用 `jsonb` 保留原始负载，常用查询字段拆成普通列。
 - 当前已实现写入 `safety_decisions`、`camera_frames`、`camera_findings`、`sensor_snapshots`、`sensor_readings`。
+- 手机 App 蓝牙同步服务读取 `safety_decisions` 及其摄像头、传感器明细；App 设置变更请求写入 `system_events`。
 - 未实现模块先预留表接口：设备注册、模型资产、运行会话、执行器命令、系统事件。
 
 ## 表关系
@@ -205,7 +206,7 @@ dotnet tool run dotnet-ef database update
 
 ### system_events
 
-系统事件表，预留给生命周期、异常、诊断日志和前端告警。
+系统事件表，用于生命周期、异常、诊断日志、前端告警，以及手机 App 请求的设置变更审计。App 同步协议的 `update_settings` 会写入 `source = app_sync`、`message = settings_update_requested` 的记录，`payload_json` 保存 `clientId` 和设置补丁。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
