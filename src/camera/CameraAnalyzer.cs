@@ -44,10 +44,12 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
 
             return output.Detections
                 .Select(detection => CreateFinding(detection, masksByLabel, landmarks, frame.CapturedAt))
+                .Where(IsRelevantFinding)
                 .ToArray();
         }
 
         return output.Labels
+            .Where(IsRelevantLabel)
             .Select(label => new CameraFinding(_cameraId, label, output.Confidence, frame.CapturedAt))
             .ToArray();
     }
@@ -88,5 +90,30 @@ public sealed class CameraAnalyzer : ICameraAnalyzer, IDisposable
         {
             disposable.Dispose();
         }
+    }
+
+    /// <summary>
+    /// 前向摄像头只保留目标检测结果，不再输出车道线或可行驶区域分割 finding。
+    /// </summary>
+    private bool IsRelevantFinding(CameraFinding finding)
+    {
+        return IsRelevantLabel(finding.Label);
+    }
+
+    /// <summary>
+    /// 判断标签是否属于当前摄像头需要上报的目标。
+    /// </summary>
+    private bool IsRelevantLabel(string label)
+    {
+        return _cameraId != CameraId.CamFront || !IsRoadSegmentationLabel(label);
+    }
+
+    /// <summary>
+    /// 判断标签是否为已放弃的道路分割输出。
+    /// </summary>
+    private static bool IsRoadSegmentationLabel(string label)
+    {
+        return label.Equals("lane_line", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("drivable_area", StringComparison.OrdinalIgnoreCase);
     }
 }

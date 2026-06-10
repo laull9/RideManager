@@ -10,7 +10,6 @@ namespace RideManager.Sensors;
 /// </summary>
 public sealed class RadarLivePreviewServer : IAsyncDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Func<RadarLiveState> _getState;
     private readonly HttpListener _listener = new();
     private readonly CancellationTokenSource _stop = new();
@@ -90,7 +89,7 @@ public sealed class RadarLivePreviewServer : IAsyncDisposable
 
             if (path.Equals("/api/state", StringComparison.OrdinalIgnoreCase))
             {
-                var json = JsonSerializer.Serialize(_getState(), JsonOptions);
+                var json = JsonSerializer.Serialize(_getState(), RideManagerJsonContext.Default.RadarLiveState);
                 await WriteTextAsync(context, json, "application/json; charset=utf-8").ConfigureAwait(false);
                 return;
             }

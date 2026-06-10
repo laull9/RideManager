@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using OpenCvSharp;
+using RideManager.Core;
+using RideManager.Sensors;
 
 namespace RideManager.Camera;
 
@@ -65,6 +67,7 @@ public sealed class CameraLiveTester
         ConcurrentDictionary<CameraId, DateTimeOffset> lastConsoleByCamera,
         CancellationToken cancellationToken)
     {
+        var decisionEngine = new SafetyDecisionEngine();
         while (!cancellationToken.IsCancellationRequested && (stopAt is null || DateTimeOffset.UtcNow < stopAt))
         {
             var activeSnapshot = GetActiveSnapshot(activeCameras, activeGate);
@@ -83,19 +86,24 @@ public sealed class CameraLiveTester
                 continue;
             }
 
+            var decision = decisionEngine.Decide(
+                new[] { result.CameraId },
+                result.Findings,
+                Array.Empty<SensorSnapshot>(),
+                new[] { result.ToFrameState() });
             if (options.Headless)
             {
                 var now = DateTimeOffset.UtcNow;
                 var lastConsoleAt = lastConsoleByCamera.GetOrAdd(result.CameraId, DateTimeOffset.MinValue);
                 if (now - lastConsoleAt > TimeSpan.FromSeconds(1))
                 {
-                    Console.WriteLine(FormatMetrics(result));
+                    Console.WriteLine(FormatMetrics(result, decision));
                     lastConsoleByCamera[result.CameraId] = now;
                 }
             }
             else
             {
-                DrawOverlay(result, activeSnapshot);
+                DrawOverlay(result, activeSnapshot, decision);
                 previewServer?.Publish(result);
             }
 
@@ -163,7 +171,10 @@ public sealed class CameraLiveTester
     /// <summary>
     /// 在预览图上绘制检测结果和性能指标。
     /// </summary>
-    private static void DrawOverlay(CameraPipelineResult result, IReadOnlyCollection<CameraId> activeCameras)
+    private static void DrawOverlay(
+        CameraPipelineResult result,
+        IReadOnlyCollection<CameraId> activeCameras,
+        SafetyDecision decision)
     {
         var image = result.PreviewImage;
         DrawSegmentationMasks(image, result.Findings);
@@ -175,6 +186,8 @@ public sealed class CameraLiveTester
             image,
             $"fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms pre={result.Metrics.PreprocessLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms drop={result.Metrics.DroppedFrames}",
             y);
+        y += 34;
+        DrawRiskStatus(image, decision, result.CameraId, y);
 
         if (result.CameraId == CameraId.CamFace && TryGetFaceFatigueFinding(result.Findings, out var fatigueFinding))
         {
@@ -197,6 +210,21 @@ public sealed class CameraLiveTester
                 DrawBox(image, finding);
             }
         }
+    }
+
+    /// <summary>
+    /// 绘制运行时风险监测状态。
+    /// </summary>
+    private static void DrawRiskStatus(Mat image, SafetyDecision decision, CameraId cameraId, int y)
+    {
+        var color = GetRiskColor(decision.RiskLevel);
+        var text = FormatRiskSummary(decision, cameraId);
+        var top = Math.Max(0, y - 28);
+        var width = Math.Min(image.Width - 16, Math.Max(520, text.Length * 13));
+        var rect = new Rect(8, top, width, 38);
+        Cv2.Rectangle(image, rect, new Scalar(0, 0, 0), -1);
+        Cv2.Rectangle(image, rect, color, 2);
+        DrawTextAt(image, text, new Point(18, y), color, 0.62, 2);
     }
 
     /// <summary>
@@ -357,6 +385,19 @@ public sealed class CameraLiveTester
     }
 
     /// <summary>
+    /// 根据风险等级选择预览颜色。
+    /// </summary>
+    private static Scalar GetRiskColor(SafetyRiskLevel riskLevel)
+    {
+        return riskLevel switch
+        {
+            SafetyRiskLevel.Danger => new Scalar(0, 0, 255),
+            SafetyRiskLevel.Warning => new Scalar(0, 220, 255),
+            _ => Scalar.LimeGreen
+        };
+    }
+
+    /// <summary>
     /// 在预览图上绘制 PFLD 人脸关键点。
     /// </summary>
     private static void DrawLandmarks(Mat image, IReadOnlyList<CameraLandmark> landmarks)
@@ -390,9 +431,26 @@ public sealed class CameraLiveTester
     /// <summary>
     /// 格式化无窗口统计输出。
     /// </summary>
-    private static string FormatMetrics(CameraPipelineResult result)
+    private static string FormatMetrics(CameraPipelineResult result, SafetyDecision decision)
     {
         var labels = string.Join(',', result.Findings.Take(8).Select(finding => $"{finding.Label}:{finding.Confidence:F2}"));
-        return $"{result.CameraId} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms pre={result.Metrics.PreprocessLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
+        return $"{result.CameraId} {FormatRiskSummary(decision, result.CameraId)} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms pre={result.Metrics.PreprocessLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
+    }
+
+    /// <summary>
+    /// 格式化当前摄像头的风险监测摘要。
+    /// </summary>
+    private static string FormatRiskSummary(SafetyDecision decision, CameraId cameraId)
+    {
+        var assessment = decision.CameraRiskAssessments.FirstOrDefault(value => value.CameraId == cameraId);
+        if (assessment is null)
+        {
+            return $"risk={decision.RiskLevel}";
+        }
+
+        var labels = assessment.LeadingLabels.Count == 0
+            ? "-"
+            : string.Join('/', assessment.LeadingLabels);
+        return $"risk={assessment.RiskLevel} score={assessment.CurrentScore:F2} recent={assessment.RecentAverageScore:F2} delta={assessment.TrendScoreDelta:+0.00;-0.00;0.00} peak={assessment.PeakScore:F2} labels={labels}";
     }
 }

@@ -26,6 +26,7 @@ public static class CameraPipelineFactory
         var sources = CreateCameraSources(enabledOptions, CreateCameraSource);
 
         return enabledOptions
+            .Where(options => sources.ContainsKey(options.Id))
             .Select(options => CreatePipeline(options, sources[options.Id], runtimeSelector))
             .ToArray();
     }
@@ -110,13 +111,28 @@ public static class CameraPipelineFactory
             {
                 foreach (var options in groupedOptions)
                 {
-                    sources.Add(options.Id, sourceFactory(options));
+                    var source = TryCreateCameraSource(options, sourceFactory);
+                    if (source is not null)
+                    {
+                        sources.Add(options.Id, source);
+                    }
                 }
 
                 continue;
             }
 
-            var broadcastSource = new BroadcastCameraSource(sourceFactory(groupedOptions[0]));
+            var sharedSource = TryCreateCameraSource(groupedOptions[0], sourceFactory);
+            if (sharedSource is null)
+            {
+                foreach (var options in groupedOptions.Skip(1))
+                {
+                    Console.WriteLine($"Warning: camera {options.Id} disabled because shared device {group.Key} is unavailable.");
+                }
+
+                continue;
+            }
+
+            var broadcastSource = new BroadcastCameraSource(sharedSource);
             foreach (var options in groupedOptions)
             {
                 sources.Add(options.Id, broadcastSource.CreateReader(options.Id));
@@ -199,14 +215,22 @@ public static class CameraPipelineFactory
             return new SimulatedCameraSource(options);
         }
 
+        return new OpenCvCameraSource(options);
+    }
+
+    /// <summary>
+    /// 尝试创建摄像头源，真实设备不可用时禁用对应链路。
+    /// </summary>
+    private static ICameraSource? TryCreateCameraSource(CameraOptions options, Func<CameraOptions, ICameraSource> sourceFactory)
+    {
         try
         {
-            return new OpenCvCameraSource(options);
+            return sourceFactory(options);
         }
         catch (Exception ex) when (IsOpenCvCaptureUnavailable(ex))
         {
-            Console.WriteLine($"Camera {options.Id} fallback to synthetic source: {ex.Message}");
-            return new SimulatedCameraSource(options);
+            Console.WriteLine($"Warning: camera {options.Id} disabled because source '{options.Device}' is unavailable: {ex.Message}");
+            return null;
         }
     }
 

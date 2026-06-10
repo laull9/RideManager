@@ -104,6 +104,75 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public async Task CreateCameraSources_WhenOnePhysicalCameraFails_DisablesOnlyThatCamera()
+    {
+        var cameras = new[]
+        {
+            CreateCamera(CameraId.CamFront, enabled: true) with { Device = "/dev/video20" },
+            CreateCamera(CameraId.CamFace, enabled: true) with { Device = "/dev/video21" }
+        };
+
+        var sources = CameraPipelineFactory.CreateCameraSources(
+            cameras,
+            camera =>
+            {
+                if (camera.Id == CameraId.CamFace)
+                {
+                    throw new InvalidOperationException("camera open failed");
+                }
+
+                return new EmptyCameraSource();
+            });
+
+        var source = Assert.Single(sources);
+        Assert.Equal(CameraId.CamFront, source.Key);
+        await source.Value.DisposeAsync();
+    }
+
+    [Fact]
+    public void CreateCameraSources_WhenSharedPhysicalDeviceFails_DisablesAllReadersOnThatDevice()
+    {
+        var cameras = new[]
+        {
+            CreateCamera(CameraId.CamFront, enabled: true) with { Device = "/dev/video22" },
+            CreateCamera(CameraId.CamFace, enabled: true) with { Device = "/dev/video22" },
+            CreateCamera(CameraId.CamBack, enabled: true) with { Device = "synthetic" }
+        };
+
+        var sources = CameraPipelineFactory.CreateCameraSources(
+            cameras,
+            camera =>
+            {
+                if (camera.Device == "/dev/video22")
+                {
+                    throw new InvalidOperationException("shared camera open failed");
+                }
+
+                return new EmptyCameraSource();
+            });
+
+        var source = Assert.Single(sources);
+        Assert.Equal(CameraId.CamBack, source.Key);
+    }
+
+    [Fact]
+    public void CreateFramePreprocessor_UsesOpenCvPreprocessorForFrontObjectDetectionOnly()
+    {
+        var options = CreateCamera(CameraId.CamFront, enabled: true) with
+        {
+            ModelName = "yolo26n.onnx",
+            Models = new[]
+            {
+                new CameraModelOptions("yolo26n.onnx", 640, 640, 0.35)
+            }
+        };
+
+        var preprocessor = CameraPipelineFactory.CreateFramePreprocessor(options);
+
+        Assert.IsType<OpenCvFramePreprocessor>(preprocessor);
+    }
+
+    [Fact]
     public void CreateFramePreprocessor_UsesFacePipelinePreprocessorForFaceLandmarkModel()
     {
         var options = CreateCamera(CameraId.CamFace, enabled: true) with

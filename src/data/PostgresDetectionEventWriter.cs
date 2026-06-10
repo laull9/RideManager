@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using RideManager.Core;
 using RideManager.Utils;
@@ -13,11 +12,6 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
 {
     private readonly DatabaseOptions _options;
     private bool _migrationApplied;
-
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
 
     /// <summary>
     /// 创建 PostgreSQL 事件写入器。
@@ -44,14 +38,38 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
         {
             RiskLevel = decision.RiskLevel,
             DecidedAt = decision.DecidedAt,
-            PayloadJson = JsonSerializer.Serialize(decision, JsonOptions)
+            PayloadJson = SerializePayload(decision)
         };
+
+        var frameEntitiesByCamera = new Dictionary<string, CameraFrameEntity>(StringComparer.OrdinalIgnoreCase);
+        foreach (var frame in decision.CameraFrames)
+        {
+            var cameraId = FormatCameraId(frame.CameraId);
+            var frameEntity = new CameraFrameEntity
+            {
+                CameraId = cameraId,
+                CapturedAt = frame.CapturedAt,
+                Width = frame.Width,
+                Height = frame.Height,
+                CaptureLatencyMs = frame.Metrics.CaptureLatencyMs,
+                PreprocessLatencyMs = frame.Metrics.PreprocessLatencyMs,
+                InferenceLatencyMs = frame.Metrics.InferenceLatencyMs,
+                TotalLatencyMs = frame.Metrics.TotalLatencyMs,
+                Fps = frame.Metrics.Fps,
+                DroppedFrames = frame.Metrics.DroppedFrames,
+                MetadataJson = SerializePayload(frame)
+            };
+            decisionEntity.CameraFrames.Add(frameEntity);
+            frameEntitiesByCamera[cameraId] = frameEntity;
+        }
 
         foreach (var finding in decision.CameraFindings)
         {
+            var cameraId = FormatCameraId(finding.CameraId);
             decisionEntity.CameraFindings.Add(new CameraFindingEntity
             {
-                CameraId = FormatCameraId(finding.CameraId),
+                CameraFrame = frameEntitiesByCamera.GetValueOrDefault(cameraId),
+                CameraId = cameraId,
                 Label = finding.Label,
                 Confidence = finding.Confidence,
                 ObservedAt = finding.ObservedAt,
@@ -59,7 +77,7 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
                 BoxY = finding.BoundingBox?.Y,
                 BoxWidth = finding.BoundingBox?.Width,
                 BoxHeight = finding.BoundingBox?.Height,
-                PayloadJson = JsonSerializer.Serialize(finding, JsonOptions)
+                PayloadJson = SerializePayload(finding)
             });
         }
 
@@ -69,7 +87,7 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
             {
                 SensorName = snapshot.SensorName,
                 ObservedAt = snapshot.ObservedAt,
-                ValuesJson = JsonSerializer.Serialize(snapshot.Values, JsonOptions)
+                ValuesJson = SerializePayload(snapshot.Values)
             };
 
             foreach (var (metric, value) in snapshot.Values)
@@ -100,6 +118,14 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
 
         await dbContext.Database.MigrateAsync(cancellationToken);
         _migrationApplied = true;
+    }
+
+    /// <summary>
+    /// 使用 source-generated JSON 上下文序列化 payload，兼容 trimmed/self-contained 运行。
+    /// </summary>
+    private static string SerializePayload<T>(T value)
+    {
+        return JsonSerializer.Serialize(value, typeof(T), RideManagerJsonContext.Default);
     }
 
     /// <summary>

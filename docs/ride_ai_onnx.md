@@ -29,6 +29,8 @@ python scripts/export_onnx.py --model student --checkpoint models/train/ride_ai/
 
 学生模型导出的 ONNX 输出保持 YOLOPv2 风格，默认 `--export-num-classes 80`，所以每个检测 anchor 的通道数为 `5 + 80 = 85`，每个尺度的输出通道数为 `3 * 85 = 255`。
 
+注意：当前 RideManager 正式 CAM_FRONT 链路已放弃车道线检测功能，只消费目标检测结果并做距离代理/透视位置/时间趋势风险分析。下面的 `drivable_logits` 与 `lane_logits` 仍属于模型导出兼容信息；如果模型输出这些分割结果，前向摄像头分析器会过滤 `drivable_area` / `lane_line` finding，不进入正式风险链路和数据库 finding。
+
 `height=640`、`width=640` 时，输出形状如下：
 
 | 顺序 | 名称 | dtype | 形状 | 说明 |

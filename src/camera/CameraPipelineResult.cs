@@ -13,12 +13,16 @@ public sealed class CameraPipelineResult : IDisposable
     public CameraPipelineResult(
         CameraId cameraId,
         DateTimeOffset capturedAt,
+        int? width,
+        int? height,
         IReadOnlyList<CameraFinding> findings,
         CameraPipelineMetrics metrics,
         Mat previewImage)
     {
         CameraId = cameraId;
         CapturedAt = capturedAt;
+        Width = width;
+        Height = height;
         Findings = findings;
         Metrics = metrics;
         PreviewImage = previewImage;
@@ -35,6 +39,16 @@ public sealed class CameraPipelineResult : IDisposable
     public DateTimeOffset CapturedAt { get; }
 
     /// <summary>
+    /// 获取原始帧宽度。
+    /// </summary>
+    public int? Width { get; }
+
+    /// <summary>
+    /// 获取原始帧高度。
+    /// </summary>
+    public int? Height { get; }
+
+    /// <summary>
     /// 获取检测结果。
     /// </summary>
     public IReadOnlyList<CameraFinding> Findings { get; }
@@ -48,6 +62,14 @@ public sealed class CameraPipelineResult : IDisposable
     /// 获取 live 显示用图像，所有权归当前结果。
     /// </summary>
     public Mat PreviewImage { get; }
+
+    /// <summary>
+    /// 转换为不包含图像数据的可持久化帧状态。
+    /// </summary>
+    public CameraFrameState ToFrameState()
+    {
+        return new CameraFrameState(CameraId, CapturedAt, Width, Height, Metrics);
+    }
 
     /// <summary>
     /// 释放 live 显示图像。

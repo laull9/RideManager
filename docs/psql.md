@@ -27,8 +27,8 @@ dotnet tool run dotnet-ef database update
 - 主键统一为 `uuid`，由应用侧生成。
 - 时间字段使用 `timestamp with time zone`，应用侧写入 UTC 时间。
 - 可变结构数据使用 `jsonb` 保留原始负载，常用查询字段拆成普通列。
-- 当前已实现写入 `safety_decisions`、`camera_findings`、`sensor_snapshots`、`sensor_readings`。
-- 未实现模块先预留表接口：设备注册、模型资产、运行会话、摄像头帧指标、执行器命令、系统事件。
+- 当前已实现写入 `safety_decisions`、`camera_frames`、`camera_findings`、`sensor_snapshots`、`sensor_readings`。
+- 未实现模块先预留表接口：设备注册、模型资产、运行会话、执行器命令、系统事件。
 
 ## 表关系
 
@@ -113,7 +113,7 @@ dotnet tool run dotnet-ef database update
 
 ### camera_frames
 
-摄像头单帧处理表，预留给完整帧指标。当前主控写库接口只传入 finding，后续把 `CameraPipelineResult` 传入数据层后开始写入。
+摄像头单帧处理表。正式运行时 `RideSupervisor` 会把每路成功处理的 `CameraPipelineResult` 转成帧状态，`PostgresDetectionEventWriter` 写入本表，并把同一摄像头的 finding 关联到该帧。摄像头打开失败的链路不会产生帧记录。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -136,7 +136,7 @@ dotnet tool run dotnet-ef database update
 
 ### camera_findings
 
-摄像头检测结果表。当前 `PostgresDetectionEventWriter` 已写入此表。
+摄像头检测结果表。当前 `PostgresDetectionEventWriter` 已写入此表；同一轮决策中存在对应 `camera_frames` 时会写入 `camera_frame_id`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
@@ -236,6 +236,17 @@ select camera_id, label, confidence, observed_at, box_x, box_y, box_width, box_h
 from camera_findings
 where safety_decision_id = :decision_id
 order by observed_at;
+```
+
+查看某次决策的摄像头帧状态：
+
+```sql
+select camera_id, captured_at, width, height,
+       capture_latency_ms, preprocess_latency_ms, inference_latency_ms,
+       total_latency_ms, fps, dropped_frames
+from camera_frames
+where safety_decision_id = :decision_id
+order by captured_at;
 ```
 
 查看某个传感器指标曲线：

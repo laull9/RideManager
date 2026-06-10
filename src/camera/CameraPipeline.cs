@@ -80,6 +80,8 @@ public sealed class CameraPipeline : IAsyncDisposable
         return new CameraPipelineResult(
             CameraId,
             frame.CapturedAt,
+            frame.Width,
+            frame.Height,
             findings,
             metrics,
             includePreview ? processed.PreviewImage.Clone() : new OpenCvSharp.Mat());

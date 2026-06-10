@@ -28,13 +28,20 @@ public sealed class SafetyDecisionEngine
     public SafetyDecision Decide(
         IReadOnlyCollection<CameraId> activeCameraIds,
         IReadOnlyList<CameraFinding> cameraFindings,
-        IReadOnlyList<SensorSnapshot> sensorSnapshots)
+        IReadOnlyList<SensorSnapshot> sensorSnapshots,
+        IReadOnlyList<CameraFrameState>? cameraFrames = null)
     {
         var decidedAt = _timeProvider.GetUtcNow();
         var cameraRiskAssessments = BuildCameraRiskAssessments(activeCameraIds, cameraFindings, decidedAt);
         var riskLevel = DetermineOverallRisk(cameraRiskAssessments, cameraFindings);
 
-        return new SafetyDecision(riskLevel, decidedAt, cameraFindings, sensorSnapshots, cameraRiskAssessments);
+        return new SafetyDecision(
+            riskLevel,
+            decidedAt,
+            cameraFindings,
+            sensorSnapshots,
+            cameraRiskAssessments,
+            cameraFrames ?? Array.Empty<CameraFrameState>());
     }
 
     /// <summary>
@@ -65,10 +72,7 @@ public sealed class SafetyDecisionEngine
                 .ToArray();
 
             var samples = GetOrCreateSamples(cameraId);
-            samples.Add(new CameraRiskSample(
-                decidedAt,
-                CalculateRiskScore(currentFindings),
-                currentFindings.Select(finding => finding.Label).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()));
+            samples.Add(CreateRiskSample(cameraId, currentFindings, decidedAt));
             samples.RemoveAll(sample => sample.ObservedAt < decidedAt - TrendWindow);
 
             assessments.Add(CreateAssessment(cameraId, samples, decidedAt));
@@ -111,8 +115,8 @@ public sealed class SafetyDecisionEngine
         var recentSamples = samples.Where(sample => sample.ObservedAt >= splitAt).ToArray();
 
         var currentScore = samples.Count == 0 ? 0.0 : samples[^1].Score;
-        var previousAverageScore = previousSamples.Length == 0 ? 0.0 : previousSamples.Average(sample => sample.Score);
         var recentAverageScore = recentSamples.Length == 0 ? 0.0 : recentSamples.Average(sample => sample.Score);
+        var previousAverageScore = previousSamples.Length == 0 ? recentAverageScore : previousSamples.Average(sample => sample.Score);
         var trendScoreDelta = recentAverageScore - previousAverageScore;
         var peakScore = samples.Count == 0 ? 0.0 : samples.Max(sample => sample.Score);
         var leadingLabels = samples
@@ -126,7 +130,7 @@ public sealed class SafetyDecisionEngine
 
         return new CameraRiskAssessment(
             cameraId,
-            DetermineTrendRiskLevel(currentScore, recentAverageScore, trendScoreDelta, peakScore),
+            DetermineTrendRiskLevel(cameraId, samples.Count, currentScore, recentAverageScore, trendScoreDelta, peakScore),
             TrendWindow.TotalSeconds,
             samples.Count,
             currentScore,
@@ -138,43 +142,95 @@ public sealed class SafetyDecisionEngine
     }
 
     /// <summary>
-    /// 计算当前帧在前后向风险窗口中的贡献分数。
+    /// 生成当前帧在前后向风险窗口中的主风险采样。
     /// </summary>
-    private static double CalculateRiskScore(IReadOnlyList<CameraFinding> cameraFindings)
+    private static CameraRiskSample CreateRiskSample(
+        CameraId cameraId,
+        IReadOnlyList<CameraFinding> cameraFindings,
+        DateTimeOffset observedAt)
     {
-        return Math.Clamp(cameraFindings.Sum(CalculateFindingScore), 0.0, 1.0);
+        var features = cameraFindings
+            .Select(finding => CalculateFindingRisk(cameraId, finding))
+            .Where(feature => feature.Score > 0.0)
+            .OrderByDescending(feature => feature.Score)
+            .ToArray();
+        var primary = features.FirstOrDefault();
+        var labels = features
+            .Where(feature => feature.Score >= 0.05)
+            .Select(feature => feature.Label)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToArray();
+
+        return new CameraRiskSample(observedAt, primary?.Score ?? 0.0, labels);
     }
 
     /// <summary>
-    /// 为单个检测结果计算风险权重，综合标签、框面积与置信度。
+    /// 为单个检测结果计算风险特征。
     /// </summary>
-    private static double CalculateFindingScore(CameraFinding finding)
+    private static FindingRiskFeature CalculateFindingRisk(CameraId cameraId, CameraFinding finding)
     {
         var labelWeight = GetLabelWeight(finding.Label);
-        var sizeWeight = GetSizeWeight(finding.BoundingBox);
-        return finding.Confidence * labelWeight * sizeWeight;
+        if (labelWeight <= 0.0)
+        {
+            return FindingRiskFeature.Empty(finding.Label);
+        }
+
+        return cameraId == CameraId.CamFront
+            ? CalculateFrontFindingRisk(finding, labelWeight)
+            : CalculateRearFindingRisk(finding, labelWeight);
     }
 
     /// <summary>
-    /// 根据近 10 秒的峰值和半窗趋势划分风险等级。
+    /// 根据近 10 秒半窗趋势划分风险等级。
     /// </summary>
     private static SafetyRiskLevel DetermineTrendRiskLevel(
+        CameraId cameraId,
+        int sampleCount,
         double currentScore,
         double recentAverageScore,
         double trendScoreDelta,
         double peakScore)
     {
-        if (currentScore >= 0.85
-            || peakScore >= 0.9
-            || (recentAverageScore >= 0.55 && trendScoreDelta >= 0.08))
+        if (cameraId == CameraId.CamFront)
+        {
+            return DetermineFrontRiskLevel(sampleCount, currentScore, recentAverageScore, trendScoreDelta, peakScore);
+        }
+
+        if (currentScore >= 0.82
+            || (sampleCount >= 4 && recentAverageScore >= 0.5 && trendScoreDelta >= 0.08))
         {
             return SafetyRiskLevel.Danger;
         }
 
-        if (currentScore >= 0.45
-            || peakScore >= 0.6
-            || recentAverageScore >= 0.28
-            || trendScoreDelta >= 0.05)
+        return currentScore >= 0.42
+            || recentAverageScore >= 0.26
+            || trendScoreDelta >= 0.06
+            ? SafetyRiskLevel.Warning
+            : SafetyRiskLevel.Normal;
+    }
+
+    /// <summary>
+    /// 前向摄像头只在碰撞走廊内并持续接近时升级到 Danger。
+    /// </summary>
+    private static SafetyRiskLevel DetermineFrontRiskLevel(
+        int sampleCount,
+        double currentScore,
+        double recentAverageScore,
+        double trendScoreDelta,
+        double peakScore)
+    {
+        if ((currentScore >= 0.92 && recentAverageScore >= 0.70)
+            || (sampleCount >= 3 && recentAverageScore >= 0.62 && trendScoreDelta >= 0.12)
+            || (sampleCount >= 3 && currentScore >= 0.82 && trendScoreDelta >= 0.18))
+        {
+            return SafetyRiskLevel.Danger;
+        }
+
+        if (currentScore >= 0.12
+            || recentAverageScore >= 0.10
+            || trendScoreDelta >= 0.06
+            || peakScore >= 0.18)
         {
             return SafetyRiskLevel.Warning;
         }
@@ -209,17 +265,66 @@ public sealed class SafetyDecisionEngine
     }
 
     /// <summary>
-    /// 使用目标框面积近似目标距离，放大逼近风险。
+    /// 计算前向摄像头单目标在碰撞走廊中的风险。
     /// </summary>
-    private static double GetSizeWeight(CameraBoundingBox? boundingBox)
+    private static FindingRiskFeature CalculateFrontFindingRisk(CameraFinding finding, double labelWeight)
     {
-        if (boundingBox is null)
+        if (finding.BoundingBox is not { } box)
         {
-            return 0.5;
+            return FindingRiskFeature.Empty(finding.Label);
         }
 
-        var normalizedArea = Math.Clamp(boundingBox.Width, 0.0, 1.0) * Math.Clamp(boundingBox.Height, 0.0, 1.0);
-        return Math.Clamp(Math.Sqrt(normalizedArea) * 2.5, 0.25, 1.0);
+        var centerX = Math.Clamp(box.X + box.Width / 2.0, 0.0, 1.0);
+        var bottomY = Math.Clamp(box.Y + box.Height, 0.0, 1.0);
+        var lateralOffset = Math.Abs(centerX - 0.5);
+        var bottomGate = SmoothStep(0.50, 0.88, bottomY);
+        var corridorHalfWidth = Lerp(0.08, 0.23, bottomGate);
+        var lateralWeight = 1.0 - SmoothStep(corridorHalfWidth * 0.65, corridorHalfWidth, lateralOffset);
+        var collisionWeight = bottomGate * Math.Clamp(lateralWeight, 0.0, 1.0);
+        if (collisionWeight <= 0.0)
+        {
+            return FindingRiskFeature.Empty(finding.Label);
+        }
+
+        var normalizedArea = Math.Clamp(box.Width, 0.0, 1.0) * Math.Clamp(box.Height, 0.0, 1.0);
+        var areaProximity = SmoothStep(0.12, 0.40, Math.Sqrt(normalizedArea));
+        var bottomProximity = SmoothStep(0.56, 0.96, bottomY);
+        var proximity = Math.Clamp(areaProximity * 0.55 + bottomProximity * 0.45, 0.0, 1.0);
+        var score = finding.Confidence * labelWeight * collisionWeight * proximity;
+
+        return new FindingRiskFeature(finding.Label, Math.Clamp(score, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 计算后向摄像头单目标风险，保留面积距离代理但不使用前向碰撞走廊。
+    /// </summary>
+    private static FindingRiskFeature CalculateRearFindingRisk(CameraFinding finding, double labelWeight)
+    {
+        if (finding.BoundingBox is not { } box)
+        {
+            return new FindingRiskFeature(finding.Label, finding.Confidence * labelWeight * 0.25);
+        }
+
+        var normalizedArea = Math.Clamp(box.Width, 0.0, 1.0) * Math.Clamp(box.Height, 0.0, 1.0);
+        var sizeWeight = Math.Clamp(Math.Sqrt(normalizedArea) * 2.5, 0.25, 1.0);
+        return new FindingRiskFeature(finding.Label, finding.Confidence * labelWeight * sizeWeight);
+    }
+
+    /// <summary>
+    /// 线性插值。
+    /// </summary>
+    private static double Lerp(double start, double end, double value)
+    {
+        return start + (end - start) * Math.Clamp(value, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// 在归一化透视区间内生成平滑权重。
+    /// </summary>
+    private static double SmoothStep(double edge0, double edge1, double value)
+    {
+        var t = Math.Clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
     }
 
     /// <summary>
@@ -260,4 +365,15 @@ public sealed class SafetyDecisionEngine
     /// 表示风险窗口中的一次采样结果。
     /// </summary>
     private sealed record CameraRiskSample(DateTimeOffset ObservedAt, double Score, IReadOnlyList<string> Labels);
+
+    /// <summary>
+    /// 表示单个 finding 对当前帧风险的贡献。
+    /// </summary>
+    private sealed record FindingRiskFeature(string Label, double Score)
+    {
+        public static FindingRiskFeature Empty(string label)
+        {
+            return new FindingRiskFeature(label, 0.0);
+        }
+    }
 }

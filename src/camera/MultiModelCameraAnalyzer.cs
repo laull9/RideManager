@@ -187,10 +187,12 @@ public sealed class MultiModelCameraAnalyzer : ICameraAnalyzer, IDisposable
 
             return output.Detections
                 .Select(detection => CreateFinding(detection, masksByLabel, landmarks, capturedAt, region))
+                .Where(IsRelevantFinding)
                 .ToArray();
         }
 
         return output.Labels
+            .Where(IsRelevantLabel)
             .Select(label => new CameraFinding(_cameraId, label, output.Confidence, capturedAt))
             .ToArray();
     }
@@ -242,6 +244,31 @@ public sealed class MultiModelCameraAnalyzer : ICameraAnalyzer, IDisposable
             Width = Math.Clamp(detection.Width * region.Width, 0.0, 1.0),
             Height = Math.Clamp(detection.Height * region.Height, 0.0, 1.0)
         };
+    }
+
+    /// <summary>
+    /// 前向摄像头只上报目标检测结果，不再输出道路分割 finding。
+    /// </summary>
+    private bool IsRelevantFinding(CameraFinding finding)
+    {
+        return IsRelevantLabel(finding.Label);
+    }
+
+    /// <summary>
+    /// 判断标签是否属于当前摄像头需要上报的目标。
+    /// </summary>
+    private bool IsRelevantLabel(string label)
+    {
+        return _cameraId != CameraId.CamFront || !IsRoadSegmentationLabel(label);
+    }
+
+    /// <summary>
+    /// 判断标签是否为已放弃的道路分割输出。
+    /// </summary>
+    private static bool IsRoadSegmentationLabel(string label)
+    {
+        return label.Equals("lane_line", StringComparison.OrdinalIgnoreCase)
+            || label.Equals("drivable_area", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -55,19 +55,22 @@ public sealed class RideSupervisor
     /// </summary>
     public async Task RunOnceAsync(CancellationToken cancellationToken)
     {
-        var cameraTasks = _cameraPipelines.Select(pipeline => pipeline.ProcessLatestAsync(cancellationToken));
+        var cameraTasks = _cameraPipelines.Select(pipeline => pipeline.ProcessLatestDetailedAsync(cancellationToken, includePreview: false));
         var sensorTasks = _sensorReaders.Select(reader => reader.ReadAsync(cancellationToken));
 
-        var cameraResults = (await Task.WhenAll(cameraTasks)).SelectMany(result => result).ToArray();
+        using var cameraResults = new CameraPipelineResultCollection(await Task.WhenAll(cameraTasks));
+        var cameraFindings = cameraResults.Results.SelectMany(result => result.Findings).ToArray();
+        var cameraFrames = cameraResults.Results.Select(result => result.ToFrameState()).ToArray();
         var sensorResults = (await Task.WhenAll(sensorTasks)).Where(snapshot => snapshot is not null).Cast<SensorSnapshot>().ToArray();
         var decision = _decisionEngine.Decide(
             _cameraPipelines.Select(pipeline => pipeline.CameraId).ToArray(),
-            cameraResults,
-            sensorResults);
+            cameraFindings,
+            sensorResults,
+            cameraFrames);
 
         await ReactAsync(decision, cancellationToken);
         await _eventWriter.WriteAsync(decision, cancellationToken);
-        Console.WriteLine($"RideManager cycle completed: {decision.RiskLevel}, cameras={cameraResults.Length}, sensors={sensorResults.Length}");
+        Console.WriteLine($"RideManager cycle completed: {decision.RiskLevel}, cameras={cameraFindings.Length}, frames={cameraFrames.Length}, sensors={sensorResults.Length}");
     }
 
     /// <summary>
@@ -83,6 +86,27 @@ public sealed class RideSupervisor
         if (decision.RiskLevel != SafetyRiskLevel.Normal)
         {
             await _speakerNotifier.NotifyAsync(decision, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// 批量释放本轮摄像头处理结果里的预览资源。
+    /// </summary>
+    private sealed class CameraPipelineResultCollection : IDisposable
+    {
+        public CameraPipelineResultCollection(IEnumerable<CameraPipelineResult?> results)
+        {
+            Results = results.Where(result => result is not null).Cast<CameraPipelineResult>().ToArray();
+        }
+
+        public IReadOnlyList<CameraPipelineResult> Results { get; }
+
+        public void Dispose()
+        {
+            foreach (var result in Results)
+            {
+                result.Dispose();
+            }
         }
     }
 }
