@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using OpenCvSharp;
 
 namespace RideManager.Camera;
@@ -25,7 +26,7 @@ public sealed class CameraLiveTester
         var activeCameras = CreateActiveSet(options.InitialCamera);
         var activeGate = new object();
         var stopAt = options.Duration is null ? (DateTimeOffset?)null : DateTimeOffset.UtcNow.Add(options.Duration.Value);
-        var lastConsoleAt = DateTimeOffset.MinValue;
+        var lastConsoleByCamera = new ConcurrentDictionary<CameraId, DateTimeOffset>();
         await using var previewServer = options.Headless
             ? null
             : new CameraLivePreviewServer(
@@ -37,30 +38,65 @@ public sealed class CameraLiveTester
             ? "Live test started in headless mode."
             : $"Live test started. Preview: {previewServer?.Url}  Buttons: front/face/back/all.");
 
+        var workers = _pipelines
+            .Select(pipeline => RunPipelineLoopAsync(
+                pipeline,
+                options,
+                stopAt,
+                activeCameras,
+                activeGate,
+                previewServer,
+                lastConsoleByCamera,
+                cancellationToken))
+            .ToArray();
+        await Task.WhenAll(workers);
+    }
+
+    /// <summary>
+    /// 独立运行单条摄像头管线，避免多模型 live test 共用同一个外层循环 FPS。
+    /// </summary>
+    private static async Task RunPipelineLoopAsync(
+        CameraPipeline pipeline,
+        CameraLiveTestOptions options,
+        DateTimeOffset? stopAt,
+        HashSet<CameraId> activeCameras,
+        object activeGate,
+        CameraLivePreviewServer? previewServer,
+        ConcurrentDictionary<CameraId, DateTimeOffset> lastConsoleByCamera,
+        CancellationToken cancellationToken)
+    {
         while (!cancellationToken.IsCancellationRequested && (stopAt is null || DateTimeOffset.UtcNow < stopAt))
         {
             var activeSnapshot = GetActiveSnapshot(activeCameras, activeGate);
-            foreach (var pipeline in _pipelines.Where(pipeline => activeSnapshot.Contains(pipeline.CameraId)))
+            if (!activeSnapshot.Contains(pipeline.CameraId))
             {
-                using var result = await pipeline.ProcessLatestDetailedAsync(cancellationToken);
-                if (result is null)
-                {
-                    continue;
-                }
+                await Task.Delay(30, cancellationToken);
+                continue;
+            }
 
-                if (options.Headless)
+            using var result = await pipeline.ProcessLatestDetailedAsync(
+                cancellationToken,
+                includePreview: !options.Headless);
+            if (result is null)
+            {
+                await Task.Delay(1, cancellationToken);
+                continue;
+            }
+
+            if (options.Headless)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var lastConsoleAt = lastConsoleByCamera.GetOrAdd(result.CameraId, DateTimeOffset.MinValue);
+                if (now - lastConsoleAt > TimeSpan.FromSeconds(1))
                 {
-                    if (DateTimeOffset.UtcNow - lastConsoleAt > TimeSpan.FromSeconds(1))
-                    {
-                        Console.WriteLine(FormatMetrics(result));
-                        lastConsoleAt = DateTimeOffset.UtcNow;
-                    }
+                    Console.WriteLine(FormatMetrics(result));
+                    lastConsoleByCamera[result.CameraId] = now;
                 }
-                else
-                {
-                    DrawOverlay(result, activeSnapshot);
-                    previewServer?.Publish(result);
-                }
+            }
+            else
+            {
+                DrawOverlay(result, activeSnapshot);
+                previewServer?.Publish(result);
             }
 
             await Task.Delay(1, cancellationToken);
@@ -185,7 +221,13 @@ public sealed class CameraLiveTester
         }
 
         using var inputMask = CreateMaskMat(mask);
-        var crop = GetLetterboxContentRect(mask.Width, mask.Height, image.Width, image.Height);
+        var region = GetMaskRegion(image, mask);
+        if (region.Width <= 0 || region.Height <= 0)
+        {
+            return;
+        }
+
+        var crop = GetLetterboxContentRect(mask.Width, mask.Height, region.Width, region.Height);
         if (crop.Width <= 0 || crop.Height <= 0)
         {
             return;
@@ -193,17 +235,30 @@ public sealed class CameraLiveTester
 
         using var croppedMask = new Mat(inputMask, crop);
         using var previewMask = new Mat();
-        Cv2.Resize(croppedMask, previewMask, image.Size(), 0, 0, InterpolationFlags.Nearest);
+        Cv2.Resize(croppedMask, previewMask, region.Size, 0, 0, InterpolationFlags.Nearest);
 
         var color = mask.Label.Equals("lane_line", StringComparison.OrdinalIgnoreCase)
             ? new Scalar(0, 0, 255)
             : new Scalar(0, 180, 60);
         var alpha = mask.Label.Equals("lane_line", StringComparison.OrdinalIgnoreCase) ? 0.75 : 0.35;
 
-        using var colorLayer = new Mat(image.Size(), MatType.CV_8UC3, color);
+        using var imageRegion = new Mat(image, region);
+        using var colorLayer = new Mat(region.Size, MatType.CV_8UC3, color);
         using var blended = new Mat();
-        Cv2.AddWeighted(image, 1.0 - alpha, colorLayer, alpha, 0, blended);
-        blended.CopyTo(image, previewMask);
+        Cv2.AddWeighted(imageRegion, 1.0 - alpha, colorLayer, alpha, 0, blended);
+        blended.CopyTo(imageRegion, previewMask);
+    }
+
+    /// <summary>
+    /// 将 mask 所属的归一化原图区域转换为 OpenCV ROI。
+    /// </summary>
+    private static Rect GetMaskRegion(Mat image, CameraSegmentationMask mask)
+    {
+        var left = Math.Clamp((int)Math.Round(mask.RegionX * image.Width), 0, image.Width - 1);
+        var top = Math.Clamp((int)Math.Round(mask.RegionY * image.Height), 0, image.Height - 1);
+        var right = Math.Clamp((int)Math.Round((mask.RegionX + mask.RegionWidth) * image.Width), left + 1, image.Width);
+        var bottom = Math.Clamp((int)Math.Round((mask.RegionY + mask.RegionHeight) * image.Height), top + 1, image.Height);
+        return new Rect(left, top, right - left, bottom - top);
     }
 
     /// <summary>
@@ -338,6 +393,6 @@ public sealed class CameraLiveTester
     private static string FormatMetrics(CameraPipelineResult result)
     {
         var labels = string.Join(',', result.Findings.Take(8).Select(finding => $"{finding.Label}:{finding.Confidence:F2}"));
-        return $"{result.CameraId} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
+        return $"{result.CameraId} fps={result.Metrics.Fps:F1} total={result.Metrics.TotalLatencyMs:F1}ms pre={result.Metrics.PreprocessLatencyMs:F1}ms infer={result.Metrics.InferenceLatencyMs:F1}ms dropped={result.Metrics.DroppedFrames} findings=[{labels}]";
     }
 }

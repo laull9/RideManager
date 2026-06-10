@@ -213,4 +213,108 @@ public sealed class InferenceTensorTests
         Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "drivable_area");
         Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "lane_line");
     }
+
+    [Fact]
+    public void InferenceOutputParser_DecodesRideAiRawHeadsAndSegmentationOutputs()
+    {
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("CamFront:ride_ai.onnx", tensor, new[] { 1, 3, 640, 640 }, 640, 640);
+        var predS8 = Enumerable.Repeat(-10.0f, 255 * 80 * 80).ToArray();
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 0, 40, 40, 0.0f);
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 1, 40, 40, 0.0f);
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 2, 40, 40, 0.0f);
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 3, 40, 40, 0.0f);
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 4, 40, 40, 8.0f);
+        WriteRawHeadValue(predS8, 85, 80, 80, 0, 6, 40, 40, 8.0f);
+        var predS16 = Enumerable.Repeat(-10.0f, 255 * 40 * 40).ToArray();
+        var predS32 = Enumerable.Repeat(-10.0f, 255 * 20 * 20).ToArray();
+        var drivableArea = new float[2 * 4 * 4];
+        var laneLine = new float[4 * 4];
+        Array.Fill(drivableArea, 1.0f, 0, 4 * 4);
+        drivableArea[4 * 4 + 5] = 2.0f;
+        laneLine[10] = 1.0f;
+        var outputs = new[]
+        {
+            new InferenceRawTensor("pred_s8", new[] { 1, 255, 80, 80 }, predS8),
+            new InferenceRawTensor("pred_s16", new[] { 1, 255, 40, 40 }, predS16),
+            new InferenceRawTensor("pred_s32", new[] { 1, 255, 20, 20 }, predS32),
+            new InferenceRawTensor("drivable_logits", new[] { 1, 2, 4, 4 }, drivableArea),
+            new InferenceRawTensor("lane_logits", new[] { 1, 1, 4, 4 }, laneLine)
+        };
+
+        var output = new InferenceOutputParser(0.35, Array.Empty<string>()).Parse(outputs, input, "onnx");
+
+        var vehicle = Assert.Single(output.Detections!, detection => detection.Label == "vehicle");
+        Assert.Equal(0.496875, vehicle.X, 6);
+        Assert.Equal(0.49375, vehicle.Y, 6);
+        Assert.Equal(0.01875, vehicle.Width, 6);
+        Assert.Equal(0.025, vehicle.Height, 6);
+        Assert.Contains(output.Detections!, detection => detection.Label == "drivable_area");
+        Assert.Contains(output.Detections!, detection => detection.Label == "lane_line");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "drivable_area");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "lane_line");
+    }
+
+    [Fact]
+    public void InferenceOutputParser_DecodesSingleChannelLaneLogitsWithConfiguredThreshold()
+    {
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("CamFront:ride_ai.onnx", tensor, new[] { 1, 3, 640, 640 }, 640, 640);
+        var laneLogits = new[] { -2.0f, -1.0f, -0.7f, 0.1f, -0.8f, -2.0f };
+        var outputs = new[]
+        {
+            new InferenceRawTensor("lane_logits", new[] { 1, 1, 2, 3 }, laneLogits)
+        };
+
+        var output = new InferenceOutputParser(0.35, Array.Empty<string>()).Parse(outputs, input, "onnx");
+
+        var lane = Assert.Single(output.Detections!);
+        Assert.Equal("lane_line", lane.Label);
+        Assert.True(lane.Confidence > 0.5);
+        var mask = Assert.Single(output.SegmentationMasks!);
+        Assert.Equal("lane_line", mask.Label);
+        Assert.Equal(255, mask.Data[3]);
+    }
+
+    private static void WriteRawHeadValue(
+        float[] values,
+        int attributes,
+        int width,
+        int height,
+        int anchor,
+        int attribute,
+        int y,
+        int x,
+        float value)
+    {
+        var channel = anchor * attributes + attribute;
+        values[channel * width * height + y * width + x] = value;
+    }
+
+    [Fact]
+    public void InferenceOutputParser_DecodesRenamedTwinLiteNetSegmentationOutputsByOrder()
+    {
+        using var tensor = new NativeFloatTensor(1);
+        var input = new InferenceInput("CamFront:twinlitenet.onnx", tensor, new[] { 1, 3, 360, 640 }, 640, 360);
+        var da = new float[2 * 6];
+        var ll = new float[2 * 6];
+        Array.Fill(da, 1.0f, 0, 6);
+        Array.Fill(ll, 1.0f, 0, 6);
+        da[1] = 0.0f;
+        da[7] = 1.0f;
+        ll[3] = 0.0f;
+        ll[9] = 1.0f;
+        var outputs = new[]
+        {
+            new InferenceRawTensor("output0", new[] { 1, 2, 2, 3 }, da),
+            new InferenceRawTensor("output1", new[] { 1, 2, 2, 3 }, ll)
+        };
+
+        var output = new InferenceOutputParser(0.35, Array.Empty<string>()).Parse(outputs, input, "rknn");
+
+        Assert.Contains(output.Detections!, detection => detection.Label == "drivable_area");
+        Assert.Contains(output.Detections!, detection => detection.Label == "lane_line");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "drivable_area");
+        Assert.Contains(output.SegmentationMasks!, mask => mask.Label == "lane_line");
+    }
 }

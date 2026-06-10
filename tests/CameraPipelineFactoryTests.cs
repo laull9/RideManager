@@ -119,6 +119,85 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public void CreateFramePreprocessor_UsesFullFramePreprocessorForMultiModelCamera()
+    {
+        var options = CreateCamera(CameraId.CamFront, enabled: true) with
+        {
+            Models = new[]
+            {
+                new CameraModelOptions("twinlitenet.onnx", 640, 360, 0.35),
+                new CameraModelOptions("yolo26n.onnx", 640, 640, 0.35)
+            }
+        };
+
+        var preprocessor = CameraPipelineFactory.CreateFramePreprocessor(options);
+
+        Assert.IsType<FullFramePreprocessor>(preprocessor);
+    }
+
+    [Fact]
+    public void ConfigLoader_ParsesCameraModelList()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [models]
+            backend = "onnx"
+            directory = "models"
+
+            [[cameras]]
+            id = "CAM_FRONT"
+            enabled = true
+            device = "synthetic"
+            model = "twinlitenet.onnx"
+            width = 1280
+            height = 720
+            input_width = 640
+            input_height = 360
+            fps = 30
+            confidence_threshold = 0.35
+
+            [[cameras.models]]
+            model = "twinlitenet.onnx"
+            input_width = 640
+            input_height = 360
+            confidence_threshold = 0.35
+            max_fps = 3
+            crop_x = 0.0
+            crop_y = 0.333333
+            crop_width = 1.0
+            crop_height = 0.666667
+
+            [[cameras.models]]
+            model = "yolo26n.onnx"
+            input_width = 640
+            input_height = 640
+            confidence_threshold = 0.40
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+
+            var camera = Assert.Single(config.Cameras);
+            Assert.Equal("twinlitenet.onnx", camera.ModelName);
+            Assert.Equal(2, camera.EffectiveModels.Count);
+            Assert.Equal("twinlitenet.onnx", camera.EffectiveModels[0].ModelName);
+            Assert.Equal(360, camera.EffectiveModels[0].InputHeight);
+            Assert.Equal(3.0, camera.EffectiveModels[0].MaxFps, 6);
+            Assert.Equal(0.333333, camera.EffectiveModels[0].CropY, 6);
+            Assert.Equal(0.666667, camera.EffectiveModels[0].CropHeight, 6);
+            Assert.Equal("yolo26n.onnx", camera.EffectiveModels[1].ModelName);
+            Assert.Equal(640, camera.EffectiveModels[1].InputHeight);
+            Assert.Equal(0.40, camera.EffectiveModels[1].ConfidenceThreshold, 6);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
     public void CreateAnalyzer_UsesRknnWrapperForYuNetAndPfldWhenTomlBackendIsRknn()
     {
         var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");

@@ -27,7 +27,38 @@ public sealed record CameraOptions(
     int InputHeight,
     int Fps,
     double ConfidenceThreshold,
-    string PixelFormat = "MJPG");
+    string PixelFormat = "MJPG")
+{
+    /// <summary>
+    /// 获取当前摄像头要运行的模型列表；为空时使用旧版单模型字段。
+    /// </summary>
+    public IReadOnlyList<CameraModelOptions> Models { get; init; } = Array.Empty<CameraModelOptions>();
+
+    /// <summary>
+    /// 获取实际运行的模型列表，兼容旧版单模型配置。
+    /// </summary>
+    public IReadOnlyList<CameraModelOptions> EffectiveModels =>
+        Models.Count > 0
+            ? Models
+            : new[]
+            {
+                new CameraModelOptions(ModelName, InputWidth, InputHeight, ConfidenceThreshold)
+            };
+}
+
+/// <summary>
+/// 表示单个摄像头链路内的一路模型配置。
+/// </summary>
+public sealed record CameraModelOptions(
+    string ModelName,
+    int InputWidth,
+    int InputHeight,
+    double ConfidenceThreshold,
+    double MaxFps = 0.0,
+    double CropX = 0.0,
+    double CropY = 0.0,
+    double CropWidth = 1.0,
+    double CropHeight = 1.0);
 
 /// <summary>
 /// 表示推理运行时的配置。

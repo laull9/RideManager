@@ -19,7 +19,11 @@ public sealed record CameraSegmentationMask(
     string Label,
     int Width,
     int Height,
-    byte[] Data);
+    byte[] Data,
+    double RegionX = 0.0,
+    double RegionY = 0.0,
+    double RegionWidth = 1.0,
+    double RegionHeight = 1.0);
 
 /// <summary>
 /// 表示映射到预览原图空间的归一化二维关键点坐标。

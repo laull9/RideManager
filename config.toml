@@ -18,6 +18,18 @@ fps = 30
 confidence_threshold = 0.35
 pixel_format = "MJPG"
 
+[[cameras.models]]
+model = "twinlitenet.onnx"
+input_width = 640
+input_height = 360
+confidence_threshold = 0.35
+
+[[cameras.models]]
+model = "yolo26n.onnx"
+input_width = 640
+input_height = 640
+confidence_threshold = 0.35
+
 [[cameras]]
 id = "CAM_FACE"
 enabled = true

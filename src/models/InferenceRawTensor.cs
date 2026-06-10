@@ -6,4 +6,4 @@ namespace RideManager.Models;
 internal sealed record InferenceRawTensor(
     string Name,
     IReadOnlyList<int> Dimensions,
-    float[] Values);
+    ReadOnlyMemory<float> Values);

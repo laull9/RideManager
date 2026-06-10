@@ -63,18 +63,42 @@ public static class ConfigLoader
     /// </summary>
     private static CameraOptions ParseCamera(CameraToml value)
     {
+        var modelOptions = value.Models
+            .Select(model => new CameraModelOptions(
+                model.Model,
+                model.InputWidth > 0 ? model.InputWidth : value.InputWidth,
+                model.InputHeight > 0 ? model.InputHeight : value.InputHeight,
+                Math.Clamp(model.ConfidenceThreshold ?? value.ConfidenceThreshold, 0.0, 1.0),
+                Math.Max(0.0, model.MaxFps),
+                ClampCropStart(model.CropX),
+                ClampCropStart(model.CropY),
+                ClampCropSize(model.CropWidth),
+                ClampCropSize(model.CropHeight)))
+            .Where(model => !string.IsNullOrWhiteSpace(model.ModelName))
+            .Select(ClampCropToImage)
+            .ToArray();
+        var primaryModel = !string.IsNullOrWhiteSpace(value.Model)
+            ? value.Model
+            : modelOptions.FirstOrDefault()?.ModelName ?? string.Empty;
+        var primaryInputWidth = modelOptions.FirstOrDefault()?.InputWidth ?? value.InputWidth;
+        var primaryInputHeight = modelOptions.FirstOrDefault()?.InputHeight ?? value.InputHeight;
+        var primaryThreshold = modelOptions.FirstOrDefault()?.ConfidenceThreshold ?? value.ConfidenceThreshold;
+
         return new CameraOptions(
             ParseCameraId(value.Id),
             value.Enabled,
             value.Device,
-            value.Model,
+            primaryModel,
             value.Width,
             value.Height,
-            value.InputWidth,
-            value.InputHeight,
+            primaryInputWidth,
+            primaryInputHeight,
             value.Fps,
-            Math.Clamp(value.ConfidenceThreshold, 0.0, 1.0),
-            value.PixelFormat);
+            Math.Clamp(primaryThreshold, 0.0, 1.0),
+            value.PixelFormat)
+        {
+            Models = modelOptions
+        };
     }
 
     /// <summary>
@@ -96,6 +120,36 @@ public static class ConfigLoader
             value.ScanTimeoutSeconds,
             value.ServicesTimeoutSeconds,
             value.ReconnectDelaySeconds);
+    }
+
+    /// <summary>
+    /// 将裁剪起点约束到归一化图像范围内。
+    /// </summary>
+    private static double ClampCropStart(double value)
+    {
+        return Math.Clamp(value, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// 将裁剪尺寸约束到归一化图像范围内。
+    /// </summary>
+    private static double ClampCropSize(double value)
+    {
+        return value <= 0 ? 1.0 : Math.Clamp(value, 0.0, 1.0);
+    }
+
+    /// <summary>
+    /// 确保裁剪区域不会超出原图边界。
+    /// </summary>
+    private static CameraModelOptions ClampCropToImage(CameraModelOptions model)
+    {
+        var width = Math.Clamp(model.CropWidth, 0.001, 1.0 - model.CropX);
+        var height = Math.Clamp(model.CropHeight, 0.001, 1.0 - model.CropY);
+        return model with
+        {
+            CropWidth = width,
+            CropHeight = height
+        };
     }
 
     /// <summary>
@@ -214,6 +268,32 @@ public static class ConfigLoader
         public double ConfidenceThreshold { get; set; } = 0.25;
 
         public string PixelFormat { get; set; } = "MJPG";
+
+        public List<CameraModelToml> Models { get; set; } = new();
+    }
+
+    /// <summary>
+    /// 表示摄像头内单个模型配置节点。
+    /// </summary>
+    private sealed class CameraModelToml
+    {
+        public string Model { get; set; } = string.Empty;
+
+        public int InputWidth { get; set; }
+
+        public int InputHeight { get; set; }
+
+        public double? ConfidenceThreshold { get; set; }
+
+        public double MaxFps { get; set; }
+
+        public double CropX { get; set; }
+
+        public double CropY { get; set; }
+
+        public double CropWidth { get; set; } = 1.0;
+
+        public double CropHeight { get; set; } = 1.0;
     }
 
     /// <summary>

@@ -88,12 +88,11 @@ public static class CameraPipelineFactory
         ICameraSource source,
         ModelRuntimeSelector runtimeSelector)
     {
-        var inferenceEngine = runtimeSelector.Create(options.ModelName, options.ConfidenceThreshold);
         return new CameraPipeline(
             options.Id,
             source,
             CreateFramePreprocessor(options),
-            CreateAnalyzer(options, runtimeSelector, inferenceEngine));
+            CreateAnalyzer(options, runtimeSelector));
     }
 
     /// <summary>
@@ -132,6 +131,11 @@ public static class CameraPipelineFactory
     /// </summary>
     internal static IFramePreprocessor CreateFramePreprocessor(CameraOptions options)
     {
+        if (options.EffectiveModels.Count > 1)
+        {
+            return new FullFramePreprocessor(options);
+        }
+
         return IsPfldModel(options.ModelName)
             ? new FacePipelineFramePreprocessor(options)
             : new OpenCvFramePreprocessor(options);
@@ -153,6 +157,36 @@ public static class CameraPipelineFactory
                 options.InputWidth,
                 options.InputHeight)
             : new CameraAnalyzer(options.Id, inferenceEngine);
+    }
+
+    /// <summary>
+    /// 按模型类型创建图像分析器。
+    /// </summary>
+    private static ICameraAnalyzer CreateAnalyzer(
+        CameraOptions options,
+        ModelRuntimeSelector runtimeSelector)
+    {
+        var models = options.EffectiveModels;
+        if (models.Count > 1)
+        {
+            var runners = models
+                .Select(model => new MultiModelCameraAnalyzer.ModelRunner(
+                    model.ModelName,
+                    Math.Max(1, model.InputWidth),
+                    Math.Max(1, model.InputHeight),
+                    model.MaxFps,
+                    model.CropX,
+                    model.CropY,
+                    model.CropWidth,
+                    model.CropHeight,
+                    runtimeSelector.Create(model.ModelName, model.ConfidenceThreshold)))
+                .ToArray();
+            return new MultiModelCameraAnalyzer(options.Id, runners);
+        }
+
+        var modelOptions = models[0];
+        var inferenceEngine = runtimeSelector.Create(modelOptions.ModelName, modelOptions.ConfidenceThreshold);
+        return CreateAnalyzer(options, runtimeSelector, inferenceEngine);
     }
 
     /// <summary>

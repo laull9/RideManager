@@ -38,14 +38,16 @@ public sealed class CameraPipeline : IAsyncDisposable
     /// </summary>
     public async Task<IReadOnlyList<CameraFinding>> ProcessLatestAsync(CancellationToken cancellationToken)
     {
-        using var result = await ProcessLatestDetailedAsync(cancellationToken);
+        using var result = await ProcessLatestDetailedAsync(cancellationToken, includePreview: false);
         return result?.Findings ?? Array.Empty<CameraFinding>();
     }
 
     /// <summary>
     /// 处理最新一帧并返回检测结果、预览图和性能指标。
     /// </summary>
-    public async Task<CameraPipelineResult?> ProcessLatestDetailedAsync(CancellationToken cancellationToken)
+    public async Task<CameraPipelineResult?> ProcessLatestDetailedAsync(
+        CancellationToken cancellationToken,
+        bool includePreview = true)
     {
         var totalWatch = Stopwatch.StartNew();
         var captureWatch = Stopwatch.StartNew();
@@ -80,7 +82,7 @@ public sealed class CameraPipeline : IAsyncDisposable
             frame.CapturedAt,
             findings,
             metrics,
-            processed.PreviewImage.Clone());
+            includePreview ? processed.PreviewImage.Clone() : new OpenCvSharp.Mat());
     }
 
     /// <summary>

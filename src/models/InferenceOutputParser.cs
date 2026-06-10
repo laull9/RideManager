@@ -9,6 +9,15 @@ internal sealed class InferenceOutputParser
     private const double YuNetNmsIouThreshold = 0.3;
     private const int MaxDetections = 50;
     private static readonly int[] YuNetStrides = { 8, 16, 32 };
+    private static readonly int[] YoloPv2RawHeadStrides = { 8, 16, 32 };
+    private static readonly IReadOnlyDictionary<int, (double Width, double Height)[]> YoloPv2Anchors =
+        new Dictionary<int, (double Width, double Height)[]>
+        {
+            [8] = new[] { (12.0, 16.0), (19.0, 36.0), (40.0, 28.0) },
+            [16] = new[] { (36.0, 75.0), (76.0, 55.0), (72.0, 146.0) },
+            [32] = new[] { (142.0, 110.0), (192.0, 243.0), (459.0, 401.0) }
+        };
+    private static readonly string[] RideAiLabels = { "person", "vehicle", "motorcycle", "bicycle" };
     private static readonly string[] CocoLabels =
     {
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
@@ -48,6 +57,7 @@ internal sealed class InferenceOutputParser
         IReadOnlyList<InferenceLandmark>? landmarks = null;
         var recognizedDetectionOutput = false;
         var isYoloPv2OutputSet = IsYoloPv2OutputSet(outputs);
+        var isTwinLiteNetOutputSet = IsTwinLiteNetOutputSet(outputs, input);
         var yunetDetections = TryParseYuNetDetections(outputs, input);
         if (yunetDetections is not null)
         {
@@ -55,8 +65,16 @@ internal sealed class InferenceOutputParser
             detections.AddRange(yunetDetections);
         }
 
-        foreach (var output in outputs)
+        var yoloPv2RawHeadDetections = TryParseYoloPv2RawHeadDetections(outputs, input);
+        if (yoloPv2RawHeadDetections is not null)
         {
+            recognizedDetectionOutput = true;
+            detections.AddRange(yoloPv2RawHeadDetections);
+        }
+
+        for (var outputIndex = 0; outputIndex < outputs.Count; outputIndex++)
+        {
+            var output = outputs[outputIndex];
             if (output.Values.Length == 0)
             {
                 continue;
@@ -67,14 +85,20 @@ internal sealed class InferenceOutputParser
                 continue;
             }
 
-            var decodedLandmarks = TryParsePfldLandmarks(output.Dimensions, output.Values);
+            if (IsYoloPv2RawHeadOutput(output) || IsYoloPv2AnchorGridOutput(output))
+            {
+                continue;
+            }
+
+            var values = output.Values.Span;
+            var decodedLandmarks = TryParsePfldLandmarks(output.Dimensions, values);
             if (decodedLandmarks is not null)
             {
                 landmarks = decodedLandmarks;
                 continue;
             }
 
-            var decodedPostProcessed = TryParsePostProcessedDetections(output.Dimensions, output.Values, input);
+            var decodedPostProcessed = TryParsePostProcessedDetections(output.Dimensions, values, input);
             if (decodedPostProcessed is not null)
             {
                 recognizedDetectionOutput = true;
@@ -82,17 +106,40 @@ internal sealed class InferenceOutputParser
             }
             else
             {
+                var twinLiteDetections = ParseTwinLiteNetSegmentation(
+                    outputIndex,
+                    output.Name,
+                    output.Dimensions,
+                    values,
+                    input,
+                    segmentationMasks,
+                    _confidenceThreshold,
+                    isTwinLiteNetOutputSet);
+                if (twinLiteDetections.Count > 0)
+                {
+                    recognizedDetectionOutput = true;
+                    detections.AddRange(twinLiteDetections);
+                    continue;
+                }
+
+                if (isTwinLiteNetOutputSet && TryGetSegmentationLayout(output.Dimensions, out _))
+                {
+                    recognizedDetectionOutput = true;
+                    continue;
+                }
+
                 detections.AddRange(ParseYoloPv2Segmentation(
                     output.Name,
                     output.Dimensions,
-                    output.Values,
+                    values,
                     input,
                     segmentationMasks,
+                    _confidenceThreshold,
                     isYoloPv2OutputSet));
-                detections.AddRange(ParseYoloDetections(output.Dimensions, output.Values, input));
+                detections.AddRange(ParseYoloDetections(output.Dimensions, values, input));
             }
 
-            var max = output.Values.Max();
+            var max = Max(values);
             if (max > best)
             {
                 best = max;
@@ -184,18 +231,18 @@ internal sealed class InferenceOutputParser
         {
             for (var x = 0; x < layout.Width; x++)
             {
-                var clsScore = NormalizeScore(ReadYuNetValue(cls.Values, layout, 1, 0, y, x));
-                var objScore = NormalizeScore(ReadYuNetValue(obj.Values, layout, 1, 0, y, x));
+                var clsScore = NormalizeScore(ReadYuNetValue(cls.Values.Span, layout, 1, 0, y, x));
+                var objScore = NormalizeScore(ReadYuNetValue(obj.Values.Span, layout, 1, 0, y, x));
                 var confidence = Math.Sqrt(clsScore * objScore);
                 if (confidence < _confidenceThreshold)
                 {
                     continue;
                 }
 
-                var centerX = (x + ReadYuNetValue(bbox.Values, layout, 4, 0, y, x)) * stride;
-                var centerY = (y + ReadYuNetValue(bbox.Values, layout, 4, 1, y, x)) * stride;
-                var width = Math.Exp(ReadYuNetValue(bbox.Values, layout, 4, 2, y, x)) * stride;
-                var height = Math.Exp(ReadYuNetValue(bbox.Values, layout, 4, 3, y, x)) * stride;
+                var centerX = (x + ReadYuNetValue(bbox.Values.Span, layout, 4, 0, y, x)) * stride;
+                var centerY = (y + ReadYuNetValue(bbox.Values.Span, layout, 4, 1, y, x)) * stride;
+                var width = Math.Exp(ReadYuNetValue(bbox.Values.Span, layout, 4, 2, y, x)) * stride;
+                var height = Math.Exp(ReadYuNetValue(bbox.Values.Span, layout, 4, 3, y, x)) * stride;
                 var left = Math.Clamp((centerX - width / 2.0) / inputWidth, 0.0, 1.0);
                 var top = Math.Clamp((centerY - height / 2.0) / inputHeight, 0.0, 1.0);
                 var right = Math.Clamp((centerX + width / 2.0) / inputWidth, 0.0, 1.0);
@@ -243,7 +290,7 @@ internal sealed class InferenceOutputParser
     /// 读取 YuNet 输出张量中的单个值。
     /// </summary>
     private static float ReadYuNetValue(
-        float[] values,
+        ReadOnlySpan<float> values,
         YuNetLayout layout,
         int channels,
         int channel,
@@ -319,9 +366,46 @@ internal sealed class InferenceOutputParser
     }
 
     /// <summary>
+    /// 计算 sigmoid，兼容 raw logits。
+    /// </summary>
+    private static double Sigmoid(float value)
+    {
+        if (value >= 0)
+        {
+            var z = Math.Exp(-value);
+            return 1.0 / (1.0 + z);
+        }
+
+        var negativeZ = Math.Exp(value);
+        return negativeZ / (1.0 + negativeZ);
+    }
+
+    /// <summary>
+    /// 在不分配临时数组的情况下读取输出张量最大值。
+    /// </summary>
+    private static float Max(ReadOnlySpan<float> values)
+    {
+        if (values.IsEmpty)
+        {
+            return 0.0f;
+        }
+
+        var max = values[0];
+        for (var index = 1; index < values.Length; index++)
+        {
+            if (values[index] > max)
+            {
+                max = values[index];
+            }
+        }
+
+        return max;
+    }
+
+    /// <summary>
     /// 解析 PFLD 106 点模型输出，布局为 [1, 212] 或 [212] 的归一化 x/y 坐标。
     /// </summary>
-    private static IReadOnlyList<InferenceLandmark>? TryParsePfldLandmarks(IReadOnlyList<int> dims, float[] values)
+    private static IReadOnlyList<InferenceLandmark>? TryParsePfldLandmarks(IReadOnlyList<int> dims, ReadOnlySpan<float> values)
     {
         var isPfldShape = values.Length == 106 * 2
             && (dims.Count == 1
@@ -381,9 +465,10 @@ internal sealed class InferenceOutputParser
     private static IReadOnlyList<InferenceDetection> ParseYoloPv2Segmentation(
         string outputName,
         IReadOnlyList<int> dims,
-        float[] values,
+        ReadOnlySpan<float> values,
         InferenceInput input,
         List<InferenceSegmentationMask> segmentationMasks,
+        double threshold,
         bool allowShapeInference)
     {
         if (!TryGetSegmentationLayout(dims, out var layout))
@@ -395,7 +480,14 @@ internal sealed class InferenceOutputParser
             || allowShapeInference && layout.Channels == 1;
         if (isLaneLine && layout.Channels == 1)
         {
-            return TryCreateMaskDetection("lane_line", values, layout.Height, layout.Width, input, segmentationMasks);
+            return TryCreateMaskDetection(
+                "lane_line",
+                values,
+                layout.Height,
+                layout.Width,
+                input,
+                segmentationMasks,
+                threshold);
         }
 
         var isDrivableArea = outputName.Contains("drivable", StringComparison.OrdinalIgnoreCase)
@@ -419,11 +511,337 @@ internal sealed class InferenceOutputParser
     /// </summary>
     private static bool IsYoloPv2OutputSet(IReadOnlyList<InferenceRawTensor> outputs)
     {
-        var hasDetection = outputs.Any(output => IsYoloDetectionShape(output.Dimensions));
+        var hasDetection = outputs.Any(output =>
+            IsYoloDetectionShape(output.Dimensions)
+            || TryGetYoloPv2RawHeadLayout(output.Dimensions, out _));
         var segmentationChannels = outputs
             .Select(output => TryGetSegmentationLayout(output.Dimensions, out var layout) ? layout.Channels : 0)
             .ToHashSet();
         return hasDetection && segmentationChannels.Contains(1) && segmentationChannels.Contains(2);
+    }
+
+    /// <summary>
+    /// 解析 YOLOPv2/ride_ai 导出的三尺度 raw head。
+    /// </summary>
+    private IReadOnlyList<InferenceDetection>? TryParseYoloPv2RawHeadDetections(
+        IReadOnlyList<InferenceRawTensor> outputs,
+        InferenceInput input)
+    {
+        var rawHeads = outputs
+            .Select(output => TryGetYoloPv2RawHeadLayout(output.Dimensions, out var layout)
+                ? (Output: output, Layout: layout)
+                : ((InferenceRawTensor Output, YoloPv2RawHeadLayout Layout)?)null)
+            .Where(item => item is not null)
+            .Select(item => item!.Value)
+            .ToArray();
+        if (rawHeads.Length == 0)
+        {
+            return null;
+        }
+
+        var detections = new List<InferenceDetection>();
+        foreach (var (output, layout) in rawHeads)
+        {
+            var anchors = GetYoloPv2Anchors(outputs, layout.Stride);
+            DecodeYoloPv2RawHead(output.Values.Span, layout, anchors, input, detections);
+        }
+
+        return detections;
+    }
+
+    /// <summary>
+    /// 解码单个 stride 的 YOLO raw head，输出原图归一化检测框。
+    /// </summary>
+    private void DecodeYoloPv2RawHead(
+        ReadOnlySpan<float> values,
+        YoloPv2RawHeadLayout layout,
+        IReadOnlyList<(double Width, double Height)> anchors,
+        InferenceInput input,
+        List<InferenceDetection> detections)
+    {
+        var expectedValues = layout.AnchorCount * layout.Attributes * layout.CellCount;
+        if (values.Length < expectedValues)
+        {
+            return;
+        }
+
+        for (var anchor = 0; anchor < layout.AnchorCount; anchor++)
+        {
+            var anchorSize = anchors[Math.Min(anchor, anchors.Count - 1)];
+            for (var y = 0; y < layout.Height; y++)
+            {
+                for (var x = 0; x < layout.Width; x++)
+                {
+                    var objectness = Sigmoid(ReadYoloPv2RawHeadValue(values, layout, anchor, 4, y, x));
+                    if (objectness <= _confidenceThreshold)
+                    {
+                        continue;
+                    }
+
+                    var bestClass = 0;
+                    var bestClassScore = 0.0;
+                    for (var classIndex = 0; classIndex < layout.ClassCount; classIndex++)
+                    {
+                        var classScore = Sigmoid(ReadYoloPv2RawHeadValue(
+                            values,
+                            layout,
+                            anchor,
+                            5 + classIndex,
+                            y,
+                            x));
+                        if (classScore > bestClassScore)
+                        {
+                            bestClassScore = classScore;
+                            bestClass = classIndex;
+                        }
+                    }
+
+                    var confidence = objectness * bestClassScore;
+                    if (confidence <= _confidenceThreshold)
+                    {
+                        continue;
+                    }
+
+                    var centerX = (Sigmoid(ReadYoloPv2RawHeadValue(values, layout, anchor, 0, y, x)) * 2.0
+                        - 0.5
+                        + x) * layout.Stride;
+                    var centerY = (Sigmoid(ReadYoloPv2RawHeadValue(values, layout, anchor, 1, y, x)) * 2.0
+                        - 0.5
+                        + y) * layout.Stride;
+                    var width = Math.Pow(Sigmoid(ReadYoloPv2RawHeadValue(values, layout, anchor, 2, y, x)) * 2.0, 2)
+                        * anchorSize.Width;
+                    var height = Math.Pow(Sigmoid(ReadYoloPv2RawHeadValue(values, layout, anchor, 3, y, x)) * 2.0, 2)
+                        * anchorSize.Height;
+
+                    if (!double.IsFinite(centerX)
+                        || !double.IsFinite(centerY)
+                        || !double.IsFinite(width)
+                        || !double.IsFinite(height)
+                        || width <= 0
+                        || height <= 0)
+                    {
+                        continue;
+                    }
+
+                    var box = NormalizeLetterboxedBox(
+                        centerX - width / 2.0,
+                        centerY - height / 2.0,
+                        centerX + width / 2.0,
+                        centerY + height / 2.0,
+                        input);
+                    if (box.Width <= 0 || box.Height <= 0)
+                    {
+                        continue;
+                    }
+
+                    detections.Add(new InferenceDetection(
+                        ResolveRideAiLabel(bestClass),
+                        confidence,
+                        box.X,
+                        box.Y,
+                        box.Width,
+                        box.Height));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 读取 raw head 中的单个 NCHW 值。
+    /// </summary>
+    private static float ReadYoloPv2RawHeadValue(
+        ReadOnlySpan<float> values,
+        YoloPv2RawHeadLayout layout,
+        int anchor,
+        int attribute,
+        int y,
+        int x)
+    {
+        var channel = anchor * layout.Attributes + attribute;
+        return values[channel * layout.CellCount + y * layout.Width + x];
+    }
+
+    /// <summary>
+    /// 识别 YOLOPv2 三尺度 raw head 的 NCHW 输出布局。
+    /// </summary>
+    private static bool TryGetYoloPv2RawHeadLayout(
+        IReadOnlyList<int> dims,
+        out YoloPv2RawHeadLayout layout)
+    {
+        if (dims.Count != 4 || dims[0] != 1 || dims[1] % 3 != 0 || dims[2] <= 1 || dims[3] <= 1)
+        {
+            layout = default;
+            return false;
+        }
+
+        var attributes = dims[1] / 3;
+        if (attributes < 6)
+        {
+            layout = default;
+            return false;
+        }
+
+        var stride = YoloPv2RawHeadStrides.FirstOrDefault(candidate => dims[2] * candidate == 640 || dims[3] * candidate == 640);
+        if (stride == 0)
+        {
+            stride = YoloPv2RawHeadStrides.FirstOrDefault(candidate => dims[2] is > 0 && dims[3] is > 0 && 640 / candidate == dims[2]);
+        }
+
+        if (stride == 0 && dims[2] == dims[3])
+        {
+            stride = dims[2] switch
+            {
+                80 => 8,
+                40 => 16,
+                20 => 32,
+                _ => 0
+            };
+        }
+
+        if (stride == 0)
+        {
+            layout = default;
+            return false;
+        }
+
+        layout = new YoloPv2RawHeadLayout(3, attributes, dims[3], dims[2], stride);
+        return true;
+    }
+
+    /// <summary>
+    /// 判断输出是否是 YOLOPv2 raw head。
+    /// </summary>
+    private static bool IsYoloPv2RawHeadOutput(InferenceRawTensor output)
+    {
+        return output.Name.StartsWith("pred_s", StringComparison.OrdinalIgnoreCase)
+            || TryGetYoloPv2RawHeadLayout(output.Dimensions, out _);
+    }
+
+    /// <summary>
+    /// 判断输出是否是伴随 raw head 导出的 anchor grid 常量。
+    /// </summary>
+    private static bool IsYoloPv2AnchorGridOutput(InferenceRawTensor output)
+    {
+        return output.Name.StartsWith("anchor_grid", StringComparison.OrdinalIgnoreCase)
+            || output.Dimensions.Count == 5
+                && output.Dimensions[0] == 1
+                && output.Dimensions[1] == 3
+                && output.Dimensions[4] == 2;
+    }
+
+    /// <summary>
+    /// 从输出中的 anchor_grid 读取 anchor，缺失时使用 YOLOPv2 默认值。
+    /// </summary>
+    private static IReadOnlyList<(double Width, double Height)> GetYoloPv2Anchors(
+        IReadOnlyList<InferenceRawTensor> outputs,
+        int stride)
+    {
+        var anchorGrid = outputs.FirstOrDefault(output =>
+            output.Name.Equals($"anchor_grid_s{stride}", StringComparison.OrdinalIgnoreCase)
+            && output.Values.Length >= 6);
+        if (anchorGrid is not null)
+        {
+            return new[]
+            {
+                ((double)anchorGrid.Values.Span[0], (double)anchorGrid.Values.Span[1]),
+                ((double)anchorGrid.Values.Span[2], (double)anchorGrid.Values.Span[3]),
+                ((double)anchorGrid.Values.Span[4], (double)anchorGrid.Values.Span[5])
+            };
+        }
+
+        return YoloPv2Anchors[stride];
+    }
+
+    /// <summary>
+    /// 解析 TwinLiteNet 的可行驶区域和车道线二分类分割输出。
+    /// </summary>
+    private static IReadOnlyList<InferenceDetection> ParseTwinLiteNetSegmentation(
+        int outputIndex,
+        string outputName,
+        IReadOnlyList<int> dims,
+        ReadOnlySpan<float> values,
+        InferenceInput input,
+        List<InferenceSegmentationMask> segmentationMasks,
+        double threshold,
+        bool allowOrderInference)
+    {
+        if (!TryGetSegmentationLayout(dims, out var layout))
+        {
+            return Array.Empty<InferenceDetection>();
+        }
+
+        var normalizedName = outputName.Trim().ToLowerInvariant();
+        var isDrivableArea = normalizedName is "da" or "drivable" or "drivable_area"
+            || normalizedName.Contains("drive", StringComparison.OrdinalIgnoreCase)
+            || allowOrderInference && outputIndex == 0;
+        var isLaneLine = normalizedName is "ll" or "lane" or "lane_line"
+            || normalizedName.Contains("lane", StringComparison.OrdinalIgnoreCase)
+            || allowOrderInference && outputIndex == 1;
+
+        if (layout.Channels == 2 && isDrivableArea)
+        {
+            return TryCreateTwoClassMaskDetection(
+                "drivable_area",
+                values,
+                layout,
+                input,
+                segmentationMasks);
+        }
+
+        if (layout.Channels == 2 && isLaneLine)
+        {
+            return TryCreateTwoClassMaskDetection(
+                "lane_line",
+                values,
+                layout,
+                input,
+                segmentationMasks);
+        }
+
+        if (layout.Channels == 1 && isLaneLine)
+        {
+            return TryCreateMaskDetection(
+                "lane_line",
+                values,
+                layout.Height,
+                layout.Width,
+                input,
+                segmentationMasks,
+                threshold);
+        }
+
+        if (layout.Channels == 1 && isDrivableArea)
+        {
+            return TryCreateMaskDetection(
+                "drivable_area",
+                values,
+                layout.Height,
+                layout.Width,
+                input,
+                segmentationMasks,
+                threshold);
+        }
+
+        return Array.Empty<InferenceDetection>();
+    }
+
+    /// <summary>
+    /// 判断输出集合是否来自 TwinLiteNet，RKNN 重命名输出时按 DA/LL 顺序兜底。
+    /// </summary>
+    private static bool IsTwinLiteNetOutputSet(IReadOnlyList<InferenceRawTensor> outputs, InferenceInput input)
+    {
+        if (input.SourceName.Contains("twinlitenet", StringComparison.OrdinalIgnoreCase)
+            || input.SourceName.Contains("twinlite", StringComparison.OrdinalIgnoreCase))
+        {
+            return outputs.Count(output =>
+                TryGetSegmentationLayout(output.Dimensions, out var layout)
+                && layout.Channels == 2) >= 2;
+        }
+
+        var names = outputs
+            .Select(output => output.Name.Trim().ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return names.Contains("da") && names.Contains("ll");
     }
 
     /// <summary>
@@ -465,29 +883,35 @@ internal sealed class InferenceOutputParser
     /// </summary>
     private static IReadOnlyList<InferenceDetection> TryCreateMaskDetection(
         string label,
-        float[] values,
+        ReadOnlySpan<float> values,
         int height,
         int width,
         InferenceInput input,
-        List<InferenceSegmentationMask> segmentationMasks)
+        List<InferenceSegmentationMask> segmentationMasks,
+        double threshold)
     {
-        if (values.Length < height * width)
+        var pixelCount = height * width;
+        if (values.Length < pixelCount)
         {
             return Array.Empty<InferenceDetection>();
         }
 
+        var valuesAreLogits = ContainsLogitRange(values, pixelCount);
+        var normalizedThreshold = Math.Clamp(threshold, 0.0, 1.0);
         var bounds = new MaskBounds();
-        var maskData = new byte[height * width];
+        var maskData = new byte[pixelCount];
         for (var y = 0; y < height; y++)
         {
             var rowOffset = y * width;
             for (var x = 0; x < width; x++)
             {
-                var value = values[rowOffset + x];
-                if (value >= 0.5f)
+                var value = valuesAreLogits
+                    ? Sigmoid(values[rowOffset + x])
+                    : values[rowOffset + x];
+                if (value >= normalizedThreshold)
                 {
                     maskData[rowOffset + x] = 255;
-                    bounds.Include(x, y, value);
+                    bounds.Include(x, y, (float)value);
                 }
             }
         }
@@ -502,11 +926,28 @@ internal sealed class InferenceOutputParser
     }
 
     /// <summary>
+    /// 判断单通道 mask 输出是否是 logits，而不是已经归一化的概率。
+    /// </summary>
+    private static bool ContainsLogitRange(ReadOnlySpan<float> values, int length)
+    {
+        for (var index = 0; index < length; index++)
+        {
+            var value = values[index];
+            if (value < 0.0f || value > 1.0f)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// 从两通道语义分割 logits/probability 图中提取类别 1 的区域。
     /// </summary>
     private static IReadOnlyList<InferenceDetection> TryCreateTwoClassMaskDetection(
         string label,
-        float[] values,
+        ReadOnlySpan<float> values,
         SegmentationLayout layout,
         InferenceInput input,
         List<InferenceSegmentationMask> segmentationMasks)
@@ -551,7 +992,7 @@ internal sealed class InferenceOutputParser
     /// </summary>
     private IReadOnlyList<InferenceDetection>? TryParsePostProcessedDetections(
         IReadOnlyList<int> dims,
-        float[] values,
+        ReadOnlySpan<float> values,
         InferenceInput input)
     {
         if (dims.Count == 2 && dims[1] == 6)
@@ -578,7 +1019,7 @@ internal sealed class InferenceOutputParser
     /// 解析后处理输出行，并把 letterbox 输入坐标还原为原图归一化坐标。
     /// </summary>
     private IReadOnlyList<InferenceDetection> ParsePostProcessedRows(
-        float[] values,
+        ReadOnlySpan<float> values,
         int rows,
         bool transposed,
         InferenceInput input)
@@ -618,7 +1059,7 @@ internal sealed class InferenceOutputParser
     /// <summary>
     /// 读取后处理输出中的单个属性值。
     /// </summary>
-    private static float ReadPostProcessedValue(float[] values, int rows, int row, int attribute, bool transposed)
+    private static float ReadPostProcessedValue(ReadOnlySpan<float> values, int rows, int row, int attribute, bool transposed)
     {
         return transposed
             ? values[attribute * rows + row]
@@ -630,7 +1071,7 @@ internal sealed class InferenceOutputParser
     /// </summary>
     private IReadOnlyList<InferenceDetection> ParseYoloDetections(
         IReadOnlyList<int> dims,
-        float[] values,
+        ReadOnlySpan<float> values,
         InferenceInput input)
     {
         if (dims.Count != 3)
@@ -708,10 +1149,20 @@ internal sealed class InferenceOutputParser
     }
 
     /// <summary>
+    /// ride_ai 学生模型把前 4 个类别通道映射为道路安全业务类别。
+    /// </summary>
+    private string ResolveRideAiLabel(int classIndex)
+    {
+        return classIndex >= 0 && classIndex < RideAiLabels.Length
+            ? RideAiLabels[classIndex]
+            : ResolveLabel(classIndex);
+    }
+
+    /// <summary>
     /// 读取 YOLO 输出中的单个属性值。
     /// </summary>
     private static float ReadYoloValue(
-        float[] values,
+        ReadOnlySpan<float> values,
         bool channelFirst,
         int attributes,
         int anchors,
@@ -803,6 +1254,27 @@ internal sealed class InferenceOutputParser
     /// 表示语义分割输出的通道数、尺寸和内存布局。
     /// </summary>
     private readonly record struct SegmentationLayout(int Channels, int Width, int Height, bool ChannelFirst);
+
+    /// <summary>
+    /// 表示 YOLOPv2 raw head 输出张量排布。
+    /// </summary>
+    private readonly record struct YoloPv2RawHeadLayout(
+        int AnchorCount,
+        int Attributes,
+        int Width,
+        int Height,
+        int Stride)
+    {
+        /// <summary>
+        /// 获取每个 anchor 的类别数。
+        /// </summary>
+        public int ClassCount => Attributes - 5;
+
+        /// <summary>
+        /// 获取单个通道的空间元素数量。
+        /// </summary>
+        public int CellCount => Width * Height;
+    }
 
     /// <summary>
     /// 表示 YuNet 输出张量排布类型。

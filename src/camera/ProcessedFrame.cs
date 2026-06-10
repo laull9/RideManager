@@ -18,7 +18,8 @@ public sealed class ProcessedFrame : IDisposable
         IReadOnlyList<int> tensorDimensions,
         int originalWidth,
         int originalHeight,
-        Mat previewImage)
+        Mat previewImage,
+        bool ownsPreviewImage = true)
     {
         CameraId = cameraId;
         CapturedAt = capturedAt;
@@ -27,6 +28,7 @@ public sealed class ProcessedFrame : IDisposable
         OriginalWidth = originalWidth;
         OriginalHeight = originalHeight;
         PreviewImage = previewImage;
+        OwnsPreviewImage = ownsPreviewImage;
     }
 
     /// <summary>
@@ -75,11 +77,19 @@ public sealed class ProcessedFrame : IDisposable
     public Mat PreviewImage { get; }
 
     /// <summary>
+    /// 获取当前对象是否负责释放预览图。
+    /// </summary>
+    private bool OwnsPreviewImage { get; }
+
+    /// <summary>
     /// 释放底层 OpenCV 图像。
     /// </summary>
     public void Dispose()
     {
         Tensor.Dispose();
-        PreviewImage.Dispose();
+        if (OwnsPreviewImage)
+        {
+            PreviewImage.Dispose();
+        }
     }
 }

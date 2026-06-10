@@ -134,11 +134,20 @@ public sealed class OnnxInferenceEngine : IInferenceEngine, IDisposable
                 continue;
             }
 
-            var values = tensor.ToArray();
-            outputs.Add(new InferenceRawTensor(result.Name, tensor.Dimensions.ToArray(), values));
+            outputs.Add(new InferenceRawTensor(result.Name, tensor.Dimensions.ToArray(), GetTensorMemory(tensor)));
         }
 
         return new InferenceOutputParser(_confidenceThreshold, _labels).Parse(outputs, input, "onnx");
+    }
+
+    /// <summary>
+    /// 优先复用 ONNX Runtime 映射出的 tensor buffer，避免大分割输出 ToArray 拷贝。
+    /// </summary>
+    private static ReadOnlyMemory<float> GetTensorMemory(Tensor<float> tensor)
+    {
+        return tensor is DenseTensor<float> denseTensor
+            ? denseTensor.Buffer
+            : tensor.ToArray();
     }
 
     /// <summary>
