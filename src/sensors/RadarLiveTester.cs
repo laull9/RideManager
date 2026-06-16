@@ -28,7 +28,16 @@ public sealed class RadarLiveTester
             ? null
             : new RadarLivePreviewServer(options.Port, () => CreateState(client, history));
 
-        client.FrameReceived += (_, frame) => history.Add(frame);
+        client.StateChanged += (_, state) =>
+            Console.WriteLine($"RADAR state={state.Phase} name={state.DeviceName ?? "--"} address={state.DeviceAddress ?? "--"} message={state.Message ?? "--"}");
+        client.FrameReceived += (_, frame) =>
+        {
+            history.Add(frame);
+            Console.WriteLine(
+                $"RADAR frame seq={frame.Sequence} st=0x{frame.Status:X2} hr={FormatValue(frame.HasHeartRate, frame.HeartRateBpm)} br={FormatValue(frame.HasBreathingRate, frame.BreathingRateBpm)} d={FormatValue(frame.HasDistance, frame.DistanceCm)} presence={frame.HasPresence}");
+        };
+        client.HealthReceived += (_, health) =>
+            Console.WriteLine($"RADAR health up={health.UptimeMs}ms notify={health.NotifyCount} dropped={health.DroppedNotifyCount} stale={health.RadarStaleMs}ms connected={health.ClientConnected} fw={health.FirmwareVersion ?? "--"}");
         await client.StartAsync(cancellationToken).ConfigureAwait(false);
 
         Console.WriteLine(options.Headless
@@ -89,6 +98,11 @@ public sealed class RadarLiveTester
         var distance = frame.HasDistance ? $"{frame.DistanceCm:F1}" : "--";
         var staleMs = Math.Max(0, (DateTimeOffset.UtcNow - frame.ObservedAt).TotalMilliseconds);
         return $"RADAR {client.State.Phase} seq={frame.Sequence} hr={hr} br={br} d={distance}cm presence={frame.HasPresence} stale={staleMs:F0}ms";
+    }
+
+    private static string FormatValue(bool valid, double? value)
+    {
+        return valid && value is not null ? $"{value:F1}" : "--";
     }
 }
 

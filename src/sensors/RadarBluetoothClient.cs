@@ -17,6 +17,8 @@ public sealed class RadarBluetoothClient : IRadarClient
     private readonly object _sync = new();
     private Task? _runTask;
     private TaskCompletionSource<RadarFrame>? _nextFrame;
+    private byte[] _lastFramePayload = Array.Empty<byte>();
+    private byte[] _lastHealthPayload = Array.Empty<byte>();
 
     /// <summary>
     /// 创建 BLE 雷达客户端。
@@ -216,16 +218,28 @@ public sealed class RadarBluetoothClient : IRadarClient
 
         var notifyWatcher = await notify.WatchPropertiesAsync(OnNotifyProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
         await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        await TryReadCharacteristicValueAsync(notify, ProcessNotifyPayload, "initial notify read", cancellationToken).ConfigureAwait(false);
 
         IDisposable? healthWatcher = null;
         if (health is not null)
         {
             healthWatcher = await health.WatchPropertiesAsync(OnHealthProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
             await health.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+            await TryReadCharacteristicValueAsync(health, ProcessHealthPayload, "initial health read", cancellationToken).ConfigureAwait(false);
         }
 
         PublishState("connected", name, address, "notifications subscribed");
-        return new RadarBluetoothSession(device, notify, health, notifyWatcher, healthWatcher, name, address);
+        return new RadarBluetoothSession(
+            device,
+            notify,
+            health,
+            notifyWatcher,
+            healthWatcher,
+            ProcessNotifyPayload,
+            ProcessHealthPayload,
+            message => PublishState("read_error", State.DeviceName, State.DeviceAddress, message),
+            name,
+            address);
     }
 
     /// <summary>
@@ -348,6 +362,20 @@ public sealed class RadarBluetoothClient : IRadarClient
             return;
         }
 
+        ProcessNotifyPayload(payload, "notify");
+    }
+
+    /// <summary>
+    /// 处理雷达数据负载。
+    /// </summary>
+    private void ProcessNotifyPayload(byte[] payload, string source)
+    {
+        if (payload.Length == 0 || payload.SequenceEqual(_lastFramePayload))
+        {
+            return;
+        }
+
+        _lastFramePayload = payload.ToArray();
         try
         {
             var frame = RadarProtocol.ParseFrame(payload, DateTimeOffset.UtcNow);
@@ -362,7 +390,7 @@ public sealed class RadarBluetoothClient : IRadarClient
         }
         catch (Exception ex)
         {
-            PublishState("parse_error", State.DeviceName, State.DeviceAddress, DecodePayloadError(payload, ex));
+            PublishState("parse_error", State.DeviceName, State.DeviceAddress, DecodePayloadError(source, payload, ex));
         }
     }
 
@@ -376,6 +404,20 @@ public sealed class RadarBluetoothClient : IRadarClient
             return;
         }
 
+        ProcessHealthPayload(payload, "health_notify");
+    }
+
+    /// <summary>
+    /// 处理雷达健康状态负载。
+    /// </summary>
+    private void ProcessHealthPayload(byte[] payload, string source)
+    {
+        if (payload.Length == 0 || payload.SequenceEqual(_lastHealthPayload))
+        {
+            return;
+        }
+
+        _lastHealthPayload = payload.ToArray();
         try
         {
             var health = RadarProtocol.ParseHealth(payload, DateTimeOffset.UtcNow);
@@ -384,7 +426,7 @@ public sealed class RadarBluetoothClient : IRadarClient
         }
         catch (Exception ex)
         {
-            PublishState("parse_error", State.DeviceName, State.DeviceAddress, DecodePayloadError(payload, ex));
+            PublishState("parse_error", State.DeviceName, State.DeviceAddress, DecodePayloadError(source, payload, ex));
         }
     }
 
@@ -445,10 +487,32 @@ public sealed class RadarBluetoothClient : IRadarClient
         }
     }
 
-    private static string DecodePayloadError(byte[] payload, Exception ex)
+    private static string DecodePayloadError(string source, byte[] payload, Exception ex)
     {
         var text = Encoding.ASCII.GetString(payload);
-        return $"failed to parse '{text}': {ex.Message}";
+        return $"failed to parse {source} payload '{text}': {ex.Message}";
+    }
+
+    /// <summary>
+    /// 主动读取一次 GATT Value，弥补部分 BlueZ/固件组合不触发 PropertiesChanged 的情况。
+    /// </summary>
+    private async Task TryReadCharacteristicValueAsync(
+        IBlueZGattCharacteristic characteristic,
+        Action<byte[], string> handler,
+        string source,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var payload = await characteristic.ReadValueAsync(new Dictionary<string, object>())
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            handler(payload, source);
+        }
+        catch (Exception ex) when (ex is DBusException or InvalidOperationException or TimeoutException)
+        {
+            PublishState("read_error", State.DeviceName, State.DeviceAddress, $"{source} failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -458,9 +522,20 @@ public sealed class RadarBluetoothClient : IRadarClient
     {
         foreach (var change in changes.Changed)
         {
-            if (change.Key == "Value" && change.Value is byte[] value)
+            if (change.Key != "Value")
+            {
+                continue;
+            }
+
+            if (change.Value is byte[] value)
             {
                 payload = value;
+                return true;
+            }
+
+            if (change.Value is IEnumerable<byte> bytes)
+            {
+                payload = bytes.ToArray();
                 return true;
             }
         }
@@ -573,6 +648,11 @@ public sealed class RadarBluetoothClient : IRadarClient
         private readonly IBlueZGattCharacteristic? _health;
         private readonly IDisposable _notifyWatcher;
         private readonly IDisposable? _healthWatcher;
+        private readonly Action<byte[], string> _notifyHandler;
+        private readonly Action<byte[], string> _healthHandler;
+        private readonly Action<string> _readErrorHandler;
+        private readonly CancellationTokenSource _pollStop = new();
+        private readonly Task _pollTask;
         private readonly TaskCompletionSource _disconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly IDisposable _disconnectWatcher;
 
@@ -585,6 +665,9 @@ public sealed class RadarBluetoothClient : IRadarClient
             IBlueZGattCharacteristic? health,
             IDisposable notifyWatcher,
             IDisposable? healthWatcher,
+            Action<byte[], string> notifyHandler,
+            Action<byte[], string> healthHandler,
+            Action<string> readErrorHandler,
             string deviceName,
             string deviceAddress)
         {
@@ -593,9 +676,13 @@ public sealed class RadarBluetoothClient : IRadarClient
             _health = health;
             _notifyWatcher = notifyWatcher;
             _healthWatcher = healthWatcher;
+            _notifyHandler = notifyHandler;
+            _healthHandler = healthHandler;
+            _readErrorHandler = readErrorHandler;
             DeviceName = deviceName;
             DeviceAddress = deviceAddress;
             _disconnectWatcher = _device.WatchPropertiesAsync(OnDeviceProperties).GetAwaiter().GetResult();
+            _pollTask = Task.Run(() => PollValuesAsync(_pollStop.Token), CancellationToken.None);
         }
 
         /// <summary>
@@ -621,6 +708,16 @@ public sealed class RadarBluetoothClient : IRadarClient
         /// </summary>
         public async ValueTask DisposeAsync()
         {
+            _pollStop.Cancel();
+            try
+            {
+                await _pollTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            _pollStop.Dispose();
             _disconnectWatcher.Dispose();
             _notifyWatcher.Dispose();
             _healthWatcher?.Dispose();
@@ -663,6 +760,39 @@ public sealed class RadarBluetoothClient : IRadarClient
                 {
                     _disconnected.TrySetResult();
                 }
+            }
+        }
+
+        private async Task PollValuesAsync(CancellationToken cancellationToken)
+        {
+            var lastHealthRead = DateTimeOffset.MinValue;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                TryReadCharacteristicValue(_notify, _notifyHandler, "notify read fallback");
+
+                if (_health is not null && DateTimeOffset.UtcNow - lastHealthRead >= TimeSpan.FromSeconds(2))
+                {
+                    TryReadCharacteristicValue(_health, _healthHandler, "health read fallback");
+                    lastHealthRead = DateTimeOffset.UtcNow;
+                }
+
+                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private void TryReadCharacteristicValue(
+            IBlueZGattCharacteristic characteristic,
+            Action<byte[], string> handler,
+            string source)
+        {
+            try
+            {
+                var payload = characteristic.ReadValueAsync(new Dictionary<string, object>()).GetAwaiter().GetResult();
+                handler(payload, source);
+            }
+            catch (Exception ex)
+            {
+                _readErrorHandler($"{source} failed: {ex.Message}");
             }
         }
     }
