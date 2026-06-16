@@ -15,6 +15,40 @@ public interface IBlueZObjectManager : IDBusObject
 }
 
 /// <summary>
+/// BlueZ GATT 管理器代理。
+/// </summary>
+[DBusInterface("org.bluez.GattManager1")]
+public interface IBlueZGattManager : IDBusObject
+{
+    /// <summary>
+    /// 注册本地 GATT 应用。
+    /// </summary>
+    Task RegisterApplicationAsync(ObjectPath application, IDictionary<string, object> options);
+
+    /// <summary>
+    /// 取消注册本地 GATT 应用。
+    /// </summary>
+    Task UnregisterApplicationAsync(ObjectPath application);
+}
+
+/// <summary>
+/// BlueZ LE 广播管理器代理。
+/// </summary>
+[DBusInterface("org.bluez.LEAdvertisingManager1")]
+public interface IBlueZLeAdvertisingManager : IDBusObject
+{
+    /// <summary>
+    /// 注册本地 LE 广播。
+    /// </summary>
+    Task RegisterAdvertisementAsync(ObjectPath advertisement, IDictionary<string, object> options);
+
+    /// <summary>
+    /// 取消注册本地 LE 广播。
+    /// </summary>
+    Task UnregisterAdvertisementAsync(ObjectPath advertisement);
+}
+
+/// <summary>
 /// BlueZ Adapter1 代理。
 /// </summary>
 [DBusInterface("org.bluez.Adapter1")]
@@ -120,6 +154,112 @@ public interface IBlueZGattCharacteristic : IDBusObject
     /// 读取属性。
     /// </summary>
     Task<T> GetAsync<T>(string prop);
+
+    /// <summary>
+    /// 监听属性变化。
+    /// </summary>
+    Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler);
+}
+
+/// <summary>
+/// 本地 BlueZ LEAdvertisement1 对象。
+/// </summary>
+[DBusInterface("org.bluez.LEAdvertisement1")]
+public interface IBlueZLocalAdvertisement : IDBusObject
+{
+    /// <summary>
+    /// BlueZ 释放广播对象。
+    /// </summary>
+    Task ReleaseAsync();
+
+    /// <summary>
+    /// 读取属性。
+    /// </summary>
+    Task<object> GetAsync(string prop);
+
+    /// <summary>
+    /// 读取全部属性。
+    /// </summary>
+    Task<IDictionary<string, object>> GetAllAsync();
+
+    /// <summary>
+    /// 写入属性。
+    /// </summary>
+    Task SetAsync(string prop, object val);
+
+    /// <summary>
+    /// 监听属性变化。
+    /// </summary>
+    Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler);
+}
+
+/// <summary>
+/// 本地 BlueZ GattService1 对象。
+/// </summary>
+[DBusInterface("org.bluez.GattService1")]
+public interface IBlueZLocalGattService : IDBusObject
+{
+    /// <summary>
+    /// 读取属性。
+    /// </summary>
+    Task<object> GetAsync(string prop);
+
+    /// <summary>
+    /// 读取全部属性。
+    /// </summary>
+    Task<IDictionary<string, object>> GetAllAsync();
+
+    /// <summary>
+    /// 写入属性。
+    /// </summary>
+    Task SetAsync(string prop, object val);
+
+    /// <summary>
+    /// 监听属性变化。
+    /// </summary>
+    Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler);
+}
+
+/// <summary>
+/// 本地 BlueZ GattCharacteristic1 对象。
+/// </summary>
+[DBusInterface("org.bluez.GattCharacteristic1")]
+public interface IBlueZLocalGattCharacteristic : IDBusObject
+{
+    /// <summary>
+    /// 开始通知。
+    /// </summary>
+    Task StartNotifyAsync();
+
+    /// <summary>
+    /// 停止通知。
+    /// </summary>
+    Task StopNotifyAsync();
+
+    /// <summary>
+    /// 读取特征值。
+    /// </summary>
+    Task<byte[]> ReadValueAsync(IDictionary<string, object> options);
+
+    /// <summary>
+    /// 写入特征值。
+    /// </summary>
+    Task WriteValueAsync(byte[] value, IDictionary<string, object> options);
+
+    /// <summary>
+    /// 读取属性。
+    /// </summary>
+    Task<object> GetAsync(string prop);
+
+    /// <summary>
+    /// 读取全部属性。
+    /// </summary>
+    Task<IDictionary<string, object>> GetAllAsync();
+
+    /// <summary>
+    /// 写入属性。
+    /// </summary>
+    Task SetAsync(string prop, object val);
 
     /// <summary>
     /// 监听属性变化。
