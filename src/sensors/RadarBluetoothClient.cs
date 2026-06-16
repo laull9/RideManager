@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using RideManager.Utils;
 using Tmds.DBus;
 
@@ -216,8 +217,14 @@ public sealed class RadarBluetoothClient : IRadarClient
             ? await GetCharacteristicAsync(service, _options.HealthUuid, cancellationToken).ConfigureAwait(false)
             : null;
 
-        var notifyWatcher = await notify.WatchPropertiesAsync(OnNotifyProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
-        await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        var acquiredNotify = await TryAcquireNotifyAsync(notify, cancellationToken).ConfigureAwait(false);
+        IDisposable? notifyWatcher = null;
+        if (acquiredNotify is null)
+        {
+            notifyWatcher = await notify.WatchPropertiesAsync(OnNotifyProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await TryReadCharacteristicValueAsync(notify, ProcessNotifyPayload, "initial notify read", cancellationToken).ConfigureAwait(false);
 
         if (health is not null)
@@ -233,6 +240,7 @@ public sealed class RadarBluetoothClient : IRadarClient
             device,
             notify,
             health,
+            acquiredNotify,
             notifyWatcher,
             ProcessNotifyPayload,
             ProcessHealthPayload,
@@ -502,6 +510,28 @@ public sealed class RadarBluetoothClient : IRadarClient
     }
 
     /// <summary>
+    /// 优先使用 BlueZ AcquireNotify 获取原始通知 fd。
+    /// </summary>
+    private async Task<AcquiredNotify?> TryAcquireNotifyAsync(
+        IBlueZGattCharacteristic characteristic,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (fileDescriptor, mtu) = await characteristic.AcquireNotifyAsync(new Dictionary<string, object>())
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            PublishState("subscribing", State.DeviceName, State.DeviceAddress, $"acquired notify fd mtu={mtu}");
+            return new AcquiredNotify(fileDescriptor, mtu);
+        }
+        catch (Exception ex) when (ex is DBusException or InvalidOperationException or TimeoutException or NotSupportedException)
+        {
+            PublishState("subscribing", State.DeviceName, State.DeviceAddress, $"AcquireNotify unavailable, falling back to StartNotify: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 从属性变化中读取 GATT Value。
     /// </summary>
     private static bool TryReadValue(PropertyChanges changes, out byte[] payload)
@@ -632,12 +662,14 @@ public sealed class RadarBluetoothClient : IRadarClient
         private readonly IBlueZDevice _device;
         private readonly IBlueZGattCharacteristic _notify;
         private readonly IBlueZGattCharacteristic? _health;
-        private readonly IDisposable _notifyWatcher;
+        private readonly AcquiredNotify? _acquiredNotify;
+        private readonly IDisposable? _notifyWatcher;
         private readonly Action<byte[], string> _notifyHandler;
         private readonly Action<byte[], string> _healthHandler;
         private readonly Action<string> _readErrorHandler;
         private readonly CancellationTokenSource _pollStop = new();
         private readonly Task _pollTask;
+        private readonly Task? _acquiredNotifyTask;
         private readonly TaskCompletionSource _disconnected = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly IDisposable _disconnectWatcher;
 
@@ -648,7 +680,8 @@ public sealed class RadarBluetoothClient : IRadarClient
             IBlueZDevice device,
             IBlueZGattCharacteristic notify,
             IBlueZGattCharacteristic? health,
-            IDisposable notifyWatcher,
+            AcquiredNotify? acquiredNotify,
+            IDisposable? notifyWatcher,
             Action<byte[], string> notifyHandler,
             Action<byte[], string> healthHandler,
             Action<string> readErrorHandler,
@@ -658,6 +691,7 @@ public sealed class RadarBluetoothClient : IRadarClient
             _device = device;
             _notify = notify;
             _health = health;
+            _acquiredNotify = acquiredNotify;
             _notifyWatcher = notifyWatcher;
             _notifyHandler = notifyHandler;
             _healthHandler = healthHandler;
@@ -666,6 +700,9 @@ public sealed class RadarBluetoothClient : IRadarClient
             DeviceAddress = deviceAddress;
             _disconnectWatcher = _device.WatchPropertiesAsync(OnDeviceProperties).GetAwaiter().GetResult();
             _pollTask = Task.Run(() => PollValuesAsync(_pollStop.Token), CancellationToken.None);
+            _acquiredNotifyTask = _acquiredNotify is null
+                ? null
+                : Task.Run(() => ReadAcquiredNotifyAsync(_acquiredNotify, _pollStop.Token), CancellationToken.None);
         }
 
         /// <summary>
@@ -692,6 +729,18 @@ public sealed class RadarBluetoothClient : IRadarClient
         public async ValueTask DisposeAsync()
         {
             _pollStop.Cancel();
+            _acquiredNotify?.FileDescriptor.Dispose();
+            if (_acquiredNotifyTask is not null)
+            {
+                try
+                {
+                    await _acquiredNotifyTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
             try
             {
                 await _pollTask.ConfigureAwait(false);
@@ -702,13 +751,16 @@ public sealed class RadarBluetoothClient : IRadarClient
 
             _pollStop.Dispose();
             _disconnectWatcher.Dispose();
-            _notifyWatcher.Dispose();
-            try
+            _notifyWatcher?.Dispose();
+            if (_acquiredNotify is null)
             {
-                await _notify.StopNotifyAsync().ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
+                try
+                {
+                    await _notify.StopNotifyAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                }
             }
 
             try
@@ -739,7 +791,10 @@ public sealed class RadarBluetoothClient : IRadarClient
             var lastHealthRead = DateTimeOffset.MinValue;
             while (!cancellationToken.IsCancellationRequested)
             {
-                TryReadCharacteristicValue(_notify, _notifyHandler, "notify read fallback");
+                if (_acquiredNotify is null)
+                {
+                    TryReadCharacteristicValue(_notify, _notifyHandler, "notify read fallback");
+                }
 
                 if (_health is not null && DateTimeOffset.UtcNow - lastHealthRead >= TimeSpan.FromSeconds(2))
                 {
@@ -749,6 +804,38 @@ public sealed class RadarBluetoothClient : IRadarClient
 
                 await Task.Delay(500, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        private async Task ReadAcquiredNotifyAsync(AcquiredNotify acquiredNotify, CancellationToken cancellationToken)
+        {
+            var fd = acquiredNotify.FileDescriptor.DangerousGetHandle().ToInt32();
+            var buffer = new byte[Math.Max(64, (int)acquiredNotify.Mtu)];
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var count = NativeRead(fd, buffer, (UIntPtr)buffer.Length);
+                if (count > 0)
+                {
+                    var payload = buffer.AsSpan(0, (int)count).ToArray();
+                    _notifyHandler(payload, "acquire_notify");
+                    continue;
+                }
+
+                if (count == 0 || cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                var error = Marshal.GetLastWin32Error();
+                if (error == 4)
+                {
+                    continue;
+                }
+
+                _readErrorHandler($"AcquireNotify read failed errno={error}");
+                break;
+            }
+
+            await Task.CompletedTask;
         }
 
         private void TryReadCharacteristicValue(
@@ -767,4 +854,9 @@ public sealed class RadarBluetoothClient : IRadarClient
             }
         }
     }
+
+    private sealed record AcquiredNotify(CloseSafeHandle FileDescriptor, ushort Mtu);
+
+    [DllImport("libc", EntryPoint = "read", SetLastError = true)]
+    private static extern nint NativeRead(int fd, byte[] buffer, UIntPtr count);
 }
