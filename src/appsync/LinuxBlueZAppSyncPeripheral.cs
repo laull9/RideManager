@@ -56,19 +56,23 @@ public sealed class LinuxBlueZAppSyncPeripheral : IAppSyncPeripheral
 
             _gattManager = _connection.CreateProxy<IBlueZGattManager>("org.bluez", adapter.Path);
             _advertisingManager = _connection.CreateProxy<IBlueZLeAdvertisingManager>("org.bluez", adapter.Path);
-            await _gattManager.RegisterApplicationAsync(AppPath, new Dictionary<string, object>())
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-            _gattRegistered = true;
-
             await _advertisingManager.RegisterAdvertisementAsync(AdvertisementPath, new Dictionary<string, object>())
                 .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
             _advertisementRegistered = true;
 
+            await _gattManager.RegisterApplicationAsync(AppPath, new Dictionary<string, object>())
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            _gattRegistered = true;
+
+            var activeAdvertisements = await _advertisingManager.GetAsync<byte>("ActiveInstances")
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+
             Console.WriteLine(
                 $"App sync bluetooth GATT registered on BlueZ as {_options.DeviceName}; service={_options.ServiceUuid}, rx={_options.RxUuid}, tx={_options.TxUuid}.");
-            Console.WriteLine("App sync bluetooth advertisement registered; scan with nRF Connect and subscribe to TX before writing RX.");
+            Console.WriteLine($"App sync bluetooth advertisement registered; active advertisements={activeAdvertisements}. Scan with nRF Connect and subscribe to TX before writing RX.");
         }
         catch (Exception ex) when (ex is DBusException or InvalidOperationException or TimeoutException)
         {

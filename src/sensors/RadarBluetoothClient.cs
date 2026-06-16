@@ -220,11 +220,11 @@ public sealed class RadarBluetoothClient : IRadarClient
         await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
         await TryReadCharacteristicValueAsync(notify, ProcessNotifyPayload, "initial notify read", cancellationToken).ConfigureAwait(false);
 
-        IDisposable? healthWatcher = null;
         if (health is not null)
         {
-            healthWatcher = await health.WatchPropertiesAsync(OnHealthProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
-            await health.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Some BlueZ/firmware combinations stop the vital-data notifications after a
+            // second characteristic is subscribed. Keep the data stream as the only notify
+            // subscription and read health periodically from the session fallback loop.
             await TryReadCharacteristicValueAsync(health, ProcessHealthPayload, "initial health read", cancellationToken).ConfigureAwait(false);
         }
 
@@ -234,7 +234,6 @@ public sealed class RadarBluetoothClient : IRadarClient
             notify,
             health,
             notifyWatcher,
-            healthWatcher,
             ProcessNotifyPayload,
             ProcessHealthPayload,
             message => PublishState("read_error", State.DeviceName, State.DeviceAddress, message),
@@ -392,19 +391,6 @@ public sealed class RadarBluetoothClient : IRadarClient
         {
             PublishState("parse_error", State.DeviceName, State.DeviceAddress, DecodePayloadError(source, payload, ex));
         }
-    }
-
-    /// <summary>
-    /// 处理固件健康状态通知。
-    /// </summary>
-    private void OnHealthProperties(PropertyChanges changes)
-    {
-        if (!TryReadValue(changes, out var payload))
-        {
-            return;
-        }
-
-        ProcessHealthPayload(payload, "health_notify");
     }
 
     /// <summary>
@@ -647,7 +633,6 @@ public sealed class RadarBluetoothClient : IRadarClient
         private readonly IBlueZGattCharacteristic _notify;
         private readonly IBlueZGattCharacteristic? _health;
         private readonly IDisposable _notifyWatcher;
-        private readonly IDisposable? _healthWatcher;
         private readonly Action<byte[], string> _notifyHandler;
         private readonly Action<byte[], string> _healthHandler;
         private readonly Action<string> _readErrorHandler;
@@ -664,7 +649,6 @@ public sealed class RadarBluetoothClient : IRadarClient
             IBlueZGattCharacteristic notify,
             IBlueZGattCharacteristic? health,
             IDisposable notifyWatcher,
-            IDisposable? healthWatcher,
             Action<byte[], string> notifyHandler,
             Action<byte[], string> healthHandler,
             Action<string> readErrorHandler,
@@ -675,7 +659,6 @@ public sealed class RadarBluetoothClient : IRadarClient
             _notify = notify;
             _health = health;
             _notifyWatcher = notifyWatcher;
-            _healthWatcher = healthWatcher;
             _notifyHandler = notifyHandler;
             _healthHandler = healthHandler;
             _readErrorHandler = readErrorHandler;
@@ -720,24 +703,12 @@ public sealed class RadarBluetoothClient : IRadarClient
             _pollStop.Dispose();
             _disconnectWatcher.Dispose();
             _notifyWatcher.Dispose();
-            _healthWatcher?.Dispose();
             try
             {
                 await _notify.StopNotifyAsync().ConfigureAwait(false);
             }
             catch (Exception)
             {
-            }
-
-            if (_health is not null)
-            {
-                try
-                {
-                    await _health.StopNotifyAsync().ConfigureAwait(false);
-                }
-                catch (Exception)
-                {
-                }
             }
 
             try

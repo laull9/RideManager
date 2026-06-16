@@ -46,6 +46,11 @@ public interface IBlueZLeAdvertisingManager : IDBusObject
     /// 取消注册本地 LE 广播。
     /// </summary>
     Task UnregisterAdvertisementAsync(ObjectPath advertisement);
+
+    /// <summary>
+    /// 读取属性。
+    /// </summary>
+    Task<T> GetAsync<T>(string prop);
 }
 
 /// <summary>
