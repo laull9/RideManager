@@ -513,21 +513,61 @@ public sealed class RadarBluetoothClient : IRadarClient
                 continue;
             }
 
-            if (change.Value is byte[] value)
+            if (TryCoerceByteArray(change.Value, out payload))
             {
-                payload = value;
-                return true;
-            }
-
-            if (change.Value is IEnumerable<byte> bytes)
-            {
-                payload = bytes.ToArray();
                 return true;
             }
         }
 
         payload = Array.Empty<byte>();
         return false;
+    }
+
+    /// <summary>
+    /// BlueZ Value 在不同 D-Bus 读取路径下可能被 Tmds.DBus 解成不同集合类型。
+    /// </summary>
+    private static bool TryCoerceByteArray(object? value, out byte[] payload)
+    {
+        switch (value)
+        {
+            case byte[] bytes:
+                payload = bytes;
+                return true;
+            case IEnumerable<byte> byteEnumerable:
+                payload = byteEnumerable.ToArray();
+                return true;
+            case System.Collections.IEnumerable enumerable when value is not string:
+                return TryCoerceEnumerable(enumerable, out payload);
+            default:
+                payload = Array.Empty<byte>();
+                return false;
+        }
+    }
+
+    private static bool TryCoerceEnumerable(System.Collections.IEnumerable values, out byte[] payload)
+    {
+        var buffer = new List<byte>();
+        foreach (var item in values.Cast<object?>())
+        {
+            try
+            {
+                buffer.Add(item switch
+                {
+                    byte value => value,
+                    sbyte value => unchecked((byte)value),
+                    IConvertible convertible => Convert.ToByte(convertible),
+                    _ => throw new InvalidCastException($"Unsupported byte value type {item?.GetType().FullName ?? "<null>"}.")
+                });
+            }
+            catch (Exception)
+            {
+                payload = Array.Empty<byte>();
+                return false;
+            }
+        }
+
+        payload = buffer.ToArray();
+        return true;
     }
 
     /// <summary>
@@ -775,8 +815,12 @@ public sealed class RadarBluetoothClient : IRadarClient
         {
             try
             {
-                var payload = characteristic.GetAsync<byte[]>("Value").GetAwaiter().GetResult();
-                handler(payload, source);
+                var properties = characteristic.GetAllAsync().GetAwaiter().GetResult();
+                if (properties.TryGetValue("Value", out var value)
+                    && TryCoerceByteArray(value, out var payload))
+                {
+                    handler(payload, source);
+                }
             }
             catch (Exception ex)
             {

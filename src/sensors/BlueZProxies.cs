@@ -112,6 +112,11 @@ public interface IBlueZDevice : IDBusObject
     Task<T> GetAsync<T>(string prop);
 
     /// <summary>
+    /// 读取全部属性。
+    /// </summary>
+    Task<IDictionary<string, object>> GetAllAsync();
+
+    /// <summary>
     /// 监听属性变化。
     /// </summary>
     Task<IDisposable> WatchPropertiesAsync(Action<PropertyChanges> handler);
@@ -159,6 +164,11 @@ public interface IBlueZGattCharacteristic : IDBusObject
     /// 读取属性。
     /// </summary>
     Task<T> GetAsync<T>(string prop);
+
+    /// <summary>
+    /// 读取全部属性。
+    /// </summary>
+    Task<IDictionary<string, object>> GetAllAsync();
 
     /// <summary>
     /// 监听属性变化。
