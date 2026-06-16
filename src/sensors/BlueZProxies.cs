@@ -136,11 +136,6 @@ public interface IBlueZGattService : IDBusObject
 public interface IBlueZGattCharacteristic : IDBusObject
 {
     /// <summary>
-    /// 获取通知文件描述符。
-    /// </summary>
-    Task<(CloseSafeHandle FileDescriptor, ushort Mtu)> AcquireNotifyAsync(IDictionary<string, object> options);
-
-    /// <summary>
     /// 开始通知。
     /// </summary>
     Task StartNotifyAsync();
