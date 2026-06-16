@@ -87,11 +87,7 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
 
         await using var dbContext = RideManagerDbContext.Create(_options);
         var now = DateTimeOffset.UtcNow;
-        var payload = AppSyncJson.ToElement(new
-        {
-            clientId,
-            patch
-        });
+        var payload = AppSyncJson.ToElement(new AppSyncSettingsUpdateEvent(clientId, patch));
         var entity = new SystemEventEntity
         {
             OccurredAt = now,

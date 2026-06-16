@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.EntityFrameworkCore;
 using RideManager.Core;
 using RideManager.Utils;
@@ -125,7 +126,10 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
     /// </summary>
     private static string SerializePayload<T>(T value)
     {
-        return JsonSerializer.Serialize(value, typeof(T), RideManagerJsonContext.Default);
+        var typeInfo = RideManagerJsonContext.Default.GetTypeInfo(typeof(T));
+        return typeInfo is JsonTypeInfo<T> typed
+            ? JsonSerializer.Serialize(value, typed)
+            : throw new InvalidOperationException($"No JSON source generation metadata registered for {typeof(T)}.");
     }
 
     /// <summary>

@@ -62,6 +62,21 @@ public sealed record AppSyncSettingsUpdateResult(
     string Message);
 
 /// <summary>
+/// 表示 App 设置变更系统事件负载。
+/// </summary>
+public sealed record AppSyncSettingsUpdateEvent(string? ClientId, JsonElement Patch);
+
+/// <summary>
+/// 表示 App ping 响应负载。
+/// </summary>
+public sealed record AppSyncPing(DateTimeOffset Pong);
+
+/// <summary>
+/// 表示 App 协议错误响应负载。
+/// </summary>
+public sealed record AppSyncError(string Message);
+
+/// <summary>
 /// 表示 App 连接握手信息。
 /// </summary>
 public sealed record AppSyncHello(

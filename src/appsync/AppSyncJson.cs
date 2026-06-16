@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using RideManager.Utils;
 
 namespace RideManager.AppSync;
 
@@ -14,7 +16,8 @@ internal static class AppSyncJson
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
+        WriteIndented = false,
+        TypeInfoResolver = RideManagerJsonContext.Default
     };
 
     /// <summary>
@@ -22,8 +25,18 @@ internal static class AppSyncJson
     /// </summary>
     public static JsonElement ToElement<T>(T value)
     {
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(value, Options));
-        return document.RootElement.Clone();
+        return JsonSerializer.SerializeToElement(value, GetTypeInfo<T>());
+    }
+
+    /// <summary>
+    /// 获取 AppSync payload 的 source-generated JSON 类型信息。
+    /// </summary>
+    private static JsonTypeInfo<T> GetTypeInfo<T>()
+    {
+        var typeInfo = RideManagerJsonContext.Default.GetTypeInfo(typeof(T));
+        return typeInfo is JsonTypeInfo<T> typed
+            ? typed
+            : throw new InvalidOperationException($"No JSON source generation metadata registered for {typeof(T)}.");
     }
 
     /// <summary>

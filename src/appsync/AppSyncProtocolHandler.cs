@@ -33,7 +33,7 @@ public sealed class AppSyncProtocolHandler
                 return SerializeError(string.Empty, "bad_request", "empty request");
             }
 
-            var request = JsonSerializer.Deserialize<AppSyncRequest>(frame, AppSyncJson.Options);
+            var request = JsonSerializer.Deserialize(frame, RideManagerJsonContext.Default.AppSyncRequest);
             if (request is null || request.V != ProtocolVersion || string.IsNullOrWhiteSpace(request.Type))
             {
                 return SerializeError(request?.Id ?? string.Empty, "bad_request", "unsupported request");
@@ -45,7 +45,7 @@ public sealed class AppSyncProtocolHandler
                 "sync_recent" => SerializeOk(request, await SyncRecentAsync(request.Payload, cancellationToken).ConfigureAwait(false)),
                 "load_more" => SerializeOk(request, await LoadMoreAsync(request.Payload, cancellationToken).ConfigureAwait(false)),
                 "update_settings" => SerializeOk(request, await UpdateSettingsAsync(request.Payload, cancellationToken).ConfigureAwait(false)),
-                "ping" => SerializeOk(request, new { pong = DateTimeOffset.UtcNow }),
+                "ping" => SerializeOk(request, new AppSyncPing(DateTimeOffset.UtcNow)),
                 _ => SerializeError(request.Id, "unknown_type", $"unknown request type: {request.Type}")
             };
         }
@@ -138,7 +138,7 @@ public sealed class AppSyncProtocolHandler
     {
         return JsonSerializer.Serialize(
             new AppSyncResponse(ProtocolVersion, request.Id, request.Type, "ok", AppSyncJson.ToElement(payload)),
-            AppSyncJson.Options);
+            RideManagerJsonContext.Default.AppSyncResponse);
     }
 
     /// <summary>
@@ -147,7 +147,7 @@ public sealed class AppSyncProtocolHandler
     private static string SerializeError(string id, string code, string message)
     {
         return JsonSerializer.Serialize(
-            new AppSyncResponse(ProtocolVersion, id, "error", code, AppSyncJson.ToElement(new { message })),
-            AppSyncJson.Options);
+            new AppSyncResponse(ProtocolVersion, id, "error", code, AppSyncJson.ToElement(new AppSyncError(message))),
+            RideManagerJsonContext.Default.AppSyncResponse);
     }
 }
