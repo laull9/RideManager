@@ -15,6 +15,17 @@ public sealed class RadarClientFactoryTests
     }
 
     [Fact]
+    public void Create_UsesPythonPrimaryOnLinuxEvenWhenFallbackIsDisabled()
+    {
+        var client = RadarClientFactory.Create(
+            CreateRadarOptions() with { PythonFallbackEnabled = false },
+            forceSimulated: false,
+            usePythonAsPrimary: true);
+
+        Assert.IsType<PythonRadarClient>(client);
+    }
+
+    [Fact]
     public void Create_UsesFallbackWrapperForNativeBleWhenLinuxPolicyIsDisabled()
     {
         var client = RadarClientFactory.Create(CreateRadarOptions(), forceSimulated: false, usePythonAsPrimary: false);

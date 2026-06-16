@@ -31,13 +31,13 @@ public static class RadarClientFactory
             return new PythonRadarClient(options);
         }
 
+        if (IsNativeBleTransport(options.Transport) && usePythonAsPrimary)
+        {
+            return new PythonRadarClient(options);
+        }
+
         if (options.PythonFallbackEnabled && IsNativeBleTransport(options.Transport))
         {
-            if (usePythonAsPrimary)
-            {
-                return new PythonRadarClient(options);
-            }
-
             return new FallbackRadarClient(options, () => CreateNative(options));
         }
 
