@@ -54,7 +54,7 @@ public static class ConfigLoader
             new ModelOptions(ModelBackend.Onnx, "models"),
             new SensorOptions(
                 CreateDefaultRadarEndpoint(),
-                new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0)),
+                new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0, false, "python3", "scripts/ble_radar_stream.py", 8.0, 2.0)),
             new ActuatorOptions(new ActuatorEndpointOptions(false), new ActuatorEndpointOptions(false)),
             new DatabaseOptions(string.Empty),
             CreateDefaultAppSyncOptions());
@@ -121,7 +121,12 @@ public static class ConfigLoader
             value.SubscribeHealth,
             value.ScanTimeoutSeconds,
             value.ServicesTimeoutSeconds,
-            value.ReconnectDelaySeconds);
+            value.ReconnectDelaySeconds,
+            value.PythonFallbackEnabled,
+            string.IsNullOrWhiteSpace(value.PythonExecutable) ? "python3" : value.PythonExecutable,
+            string.IsNullOrWhiteSpace(value.PythonScript) ? "scripts/ble_radar_stream.py" : value.PythonScript,
+            value.PythonFallbackTimeoutSeconds <= 0 ? 8.0 : value.PythonFallbackTimeoutSeconds,
+            value.PythonRestartDelaySeconds <= 0 ? value.ReconnectDelaySeconds : value.PythonRestartDelaySeconds);
     }
 
     /// <summary>
@@ -172,6 +177,11 @@ public static class ConfigLoader
             true,
             12.0,
             10.0,
+            2.0,
+            true,
+            "python3",
+            "scripts/ble_radar_stream.py",
+            8.0,
             2.0);
     }
 
@@ -374,6 +384,16 @@ public static class ConfigLoader
         public double ServicesTimeoutSeconds { get; set; } = 10.0;
 
         public double ReconnectDelaySeconds { get; set; } = 2.0;
+
+        public bool PythonFallbackEnabled { get; set; } = true;
+
+        public string PythonExecutable { get; set; } = "python3";
+
+        public string PythonScript { get; set; } = "scripts/ble_radar_stream.py";
+
+        public double PythonFallbackTimeoutSeconds { get; set; } = 8.0;
+
+        public double PythonRestartDelaySeconds { get; set; } = 2.0;
     }
 
     /// <summary>

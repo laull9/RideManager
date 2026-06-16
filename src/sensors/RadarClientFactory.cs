@@ -20,6 +20,22 @@ public static class RadarClientFactory
             return new SimulatedRadarClient(options);
         }
 
+        if (options.Transport.Equals("python", StringComparison.OrdinalIgnoreCase)
+            || options.Transport.Equals("ble-python", StringComparison.OrdinalIgnoreCase))
+        {
+            return new PythonRadarClient(options);
+        }
+
+        if (options.PythonFallbackEnabled && IsNativeBleTransport(options.Transport))
+        {
+            return new FallbackRadarClient(options, () => CreateNative(options));
+        }
+
+        return CreateNative(options);
+    }
+
+    private static IRadarClient CreateNative(SensorEndpointOptions options)
+    {
         if (options.Transport.Equals("bluez", StringComparison.OrdinalIgnoreCase))
         {
             return new RadarBluetoothClient(options);
@@ -34,5 +50,12 @@ public static class RadarClientFactory
         }
 
         throw new NotSupportedException($"Unsupported radar transport: {options.Transport}");
+    }
+
+    private static bool IsNativeBleTransport(string transport)
+    {
+        return transport.Equals("bluez", StringComparison.OrdinalIgnoreCase)
+            || transport.Equals("bluetooth", StringComparison.OrdinalIgnoreCase)
+            || transport.Equals("ble", StringComparison.OrdinalIgnoreCase);
     }
 }

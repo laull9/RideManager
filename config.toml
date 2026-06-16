@@ -64,6 +64,11 @@ subscribe_health = true
 scan_timeout_seconds = 12.0
 services_timeout_seconds = 10.0
 reconnect_delay_seconds = 2.0
+python_fallback_enabled = true
+python_executable = "python3"
+python_script = "scripts/ble_radar_stream.py"
+python_fallback_timeout_seconds = 8.0
+python_restart_delay_seconds = 2.0
 
 [sensors.gyro]
 enabled = false

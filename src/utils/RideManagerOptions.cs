@@ -87,7 +87,12 @@ public sealed record SensorEndpointOptions(
     bool SubscribeHealth,
     double ScanTimeoutSeconds,
     double ServicesTimeoutSeconds,
-    double ReconnectDelaySeconds);
+    double ReconnectDelaySeconds,
+    bool PythonFallbackEnabled,
+    string PythonExecutable,
+    string PythonScript,
+    double PythonFallbackTimeoutSeconds,
+    double PythonRestartDelaySeconds);
 
 /// <summary>
 /// 表示所有执行器的配置。
