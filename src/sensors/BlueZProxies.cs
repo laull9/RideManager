@@ -6,7 +6,7 @@ namespace RideManager.Sensors;
 /// BlueZ ObjectManager 代理。
 /// </summary>
 [DBusInterface("org.freedesktop.DBus.ObjectManager")]
-internal interface IBlueZObjectManager : IDBusObject
+public interface IBlueZObjectManager : IDBusObject
 {
     /// <summary>
     /// 读取 BlueZ 当前管理对象。
@@ -18,7 +18,7 @@ internal interface IBlueZObjectManager : IDBusObject
 /// BlueZ Adapter1 代理。
 /// </summary>
 [DBusInterface("org.bluez.Adapter1")]
-internal interface IBlueZAdapter : IDBusObject
+public interface IBlueZAdapter : IDBusObject
 {
     /// <summary>
     /// 开始扫描。
@@ -55,7 +55,7 @@ internal interface IBlueZAdapter : IDBusObject
 /// BlueZ Device1 代理。
 /// </summary>
 [DBusInterface("org.bluez.Device1")]
-internal interface IBlueZDevice : IDBusObject
+public interface IBlueZDevice : IDBusObject
 {
     /// <summary>
     /// 连接设备。
@@ -82,7 +82,7 @@ internal interface IBlueZDevice : IDBusObject
 /// BlueZ GattService1 代理。
 /// </summary>
 [DBusInterface("org.bluez.GattService1")]
-internal interface IBlueZGattService : IDBusObject
+public interface IBlueZGattService : IDBusObject
 {
     /// <summary>
     /// 读取属性。
@@ -94,7 +94,7 @@ internal interface IBlueZGattService : IDBusObject
 /// BlueZ GattCharacteristic1 代理。
 /// </summary>
 [DBusInterface("org.bluez.GattCharacteristic1")]
-internal interface IBlueZGattCharacteristic : IDBusObject
+public interface IBlueZGattCharacteristic : IDBusObject
 {
     /// <summary>
     /// 开始通知。
