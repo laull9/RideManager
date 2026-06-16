@@ -13,6 +13,11 @@ public static class RadarClientFactory
     /// </summary>
     public static IRadarClient Create(SensorEndpointOptions options, bool forceSimulated = false)
     {
+        return Create(options, forceSimulated, UsePythonAsPrimaryOnLinux());
+    }
+
+    internal static IRadarClient Create(SensorEndpointOptions options, bool forceSimulated, bool usePythonAsPrimary)
+    {
         if (forceSimulated
             || options.Transport.Equals("simulate", StringComparison.OrdinalIgnoreCase)
             || options.Address.Equals("simulate", StringComparison.OrdinalIgnoreCase))
@@ -28,6 +33,11 @@ public static class RadarClientFactory
 
         if (options.PythonFallbackEnabled && IsNativeBleTransport(options.Transport))
         {
+            if (usePythonAsPrimary)
+            {
+                return new PythonRadarClient(options);
+            }
+
             return new FallbackRadarClient(options, () => CreateNative(options));
         }
 
@@ -57,5 +67,10 @@ public static class RadarClientFactory
         return transport.Equals("bluez", StringComparison.OrdinalIgnoreCase)
             || transport.Equals("bluetooth", StringComparison.OrdinalIgnoreCase)
             || transport.Equals("ble", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool UsePythonAsPrimaryOnLinux()
+    {
+        return RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     }
 }
