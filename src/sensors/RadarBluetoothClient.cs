@@ -203,42 +203,90 @@ public sealed class RadarBluetoothClient : IRadarClient
         var device = await DiscoverDeviceAsync(adapter, cancellationToken).ConfigureAwait(false);
         var name = await ReadDeviceNameAsync(device).ConfigureAwait(false);
         var address = await ReadDeviceAddressAsync(device).ConfigureAwait(false);
+        IDisposable? notifyWatcher = null;
+        IBlueZGattCharacteristic? notify = null;
+        bool notifyStarted = false;
 
-        PublishState("connecting", name, address, "connecting GATT");
-        await device.ConnectAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
-        await WaitForServicesResolvedAsync(device, cancellationToken).ConfigureAwait(false);
-
-        var service = await GetServiceAsync(device, _options.ServiceUuid, cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidOperationException($"Missing radar service {_options.ServiceUuid}");
-        var notify = await GetCharacteristicAsync(service, _options.NotifyUuid, cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidOperationException($"Missing radar notify characteristic {_options.NotifyUuid}");
-        var health = _options.SubscribeHealth
-            ? await GetCharacteristicAsync(service, _options.HealthUuid, cancellationToken).ConfigureAwait(false)
-            : null;
-
-        var notifyWatcher = await notify.WatchPropertiesAsync(OnNotifyProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
-        await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
-        await TryReadCharacteristicValueAsync(notify, ProcessNotifyPayload, "initial notify read", cancellationToken).ConfigureAwait(false);
-
-        if (health is not null)
+        try
         {
-            // Some BlueZ/firmware combinations stop the vital-data notifications after a
-            // second characteristic is subscribed. Keep the data stream as the only notify
-            // subscription and read health periodically from the session fallback loop.
-            await TryReadCharacteristicValueAsync(health, ProcessHealthPayload, "initial health read", cancellationToken).ConfigureAwait(false);
+            PublishState("connecting", name, address, "connecting GATT");
+            await device.ConnectAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+            await WaitForServicesResolvedAsync(device, cancellationToken).ConfigureAwait(false);
+
+            var service = await GetServiceAsync(device, _options.ServiceUuid, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Missing radar service {_options.ServiceUuid}");
+            notify = await GetCharacteristicAsync(service, _options.NotifyUuid, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Missing radar notify characteristic {_options.NotifyUuid}");
+            var health = _options.SubscribeHealth
+                ? await GetCharacteristicAsync(service, _options.HealthUuid, cancellationToken).ConfigureAwait(false)
+                : null;
+
+            notifyWatcher = await notify.WatchPropertiesAsync(OnNotifyProperties).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await notify.StartNotifyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+            notifyStarted = true;
+            await TryReadCharacteristicValueAsync(notify, ProcessNotifyPayload, "initial notify read", cancellationToken).ConfigureAwait(false);
+
+            if (health is not null)
+            {
+                // Some BlueZ/firmware combinations stop the vital-data notifications after a
+                // second characteristic is subscribed. Keep the data stream as the only notify
+                // subscription and read health periodically from the session fallback loop.
+                await TryReadCharacteristicValueAsync(health, ProcessHealthPayload, "initial health read", cancellationToken).ConfigureAwait(false);
+            }
+
+            PublishState("connected", name, address, "notifications subscribed");
+            var session = new RadarBluetoothSession(
+                device,
+                notify,
+                health,
+                notifyWatcher,
+                ProcessNotifyPayload,
+                ProcessHealthPayload,
+                message => PublishState("read_error", State.DeviceName, State.DeviceAddress, message),
+                name,
+                address);
+            notifyWatcher = null;
+            notifyStarted = false;
+            return session;
+        }
+        catch
+        {
+            await CleanupPartialConnectionAsync(device, notify, notifyWatcher, notifyStarted).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 清理尚未交给会话对象托管的 BlueZ 连接资源。
+    /// </summary>
+    private static async Task CleanupPartialConnectionAsync(
+        IBlueZDevice device,
+        IBlueZGattCharacteristic? notify,
+        IDisposable? notifyWatcher,
+        bool notifyStarted)
+    {
+        notifyWatcher?.Dispose();
+        if (notifyStarted && notify is not null)
+        {
+            try
+            {
+                await notify.StopNotifyAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
         }
 
-        PublishState("connected", name, address, "notifications subscribed");
-        return new RadarBluetoothSession(
-            device,
-            notify,
-            health,
-            notifyWatcher,
-            ProcessNotifyPayload,
-            ProcessHealthPayload,
-            message => PublishState("read_error", State.DeviceName, State.DeviceAddress, message),
-            name,
-            address);
+        try
+        {
+            if (await device.GetAsync<bool>("Connected").WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false))
+            {
+                await device.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+        }
     }
 
     /// <summary>
@@ -300,7 +348,15 @@ public sealed class RadarBluetoothClient : IRadarClient
         {
             try
             {
-                await adapter.StopDiscoveryAsync().ConfigureAwait(false);
+                await adapter.StopDiscoveryAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+            }
+
+            try
+            {
+                await adapter.SetDiscoveryFilterAsync(new Dictionary<string, object>()).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -745,7 +801,7 @@ public sealed class RadarBluetoothClient : IRadarClient
             _notifyWatcher.Dispose();
             try
             {
-                await _notify.StopNotifyAsync().ConfigureAwait(false);
+                await _notify.StopNotifyAsync().WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -753,9 +809,9 @@ public sealed class RadarBluetoothClient : IRadarClient
 
             try
             {
-                if (await _device.GetAsync<bool>("Connected").ConfigureAwait(false))
+                if (await _device.GetAsync<bool>("Connected").WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false))
                 {
-                    await _device.DisconnectAsync().ConfigureAwait(false);
+                    await _device.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
                 }
             }
             catch (Exception)
@@ -799,7 +855,10 @@ public sealed class RadarBluetoothClient : IRadarClient
         {
             try
             {
-                var payload = characteristic.ReadValueAsync(new Dictionary<string, object>()).GetAwaiter().GetResult();
+                var payload = characteristic.ReadValueAsync(new Dictionary<string, object>())
+                    .WaitAsync(TimeSpan.FromSeconds(2))
+                    .GetAwaiter()
+                    .GetResult();
                 handler(payload, source);
             }
             catch (Exception ex)
@@ -815,7 +874,10 @@ public sealed class RadarBluetoothClient : IRadarClient
         {
             try
             {
-                var properties = characteristic.GetAllAsync().GetAwaiter().GetResult();
+                var properties = characteristic.GetAllAsync()
+                    .WaitAsync(TimeSpan.FromSeconds(2))
+                    .GetAwaiter()
+                    .GetResult();
                 if (properties.TryGetValue("Value", out var value)
                     && TryCoerceByteArray(value, out var payload))
                 {

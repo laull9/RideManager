@@ -21,14 +21,14 @@
 | tx_uuid | `7f7d0003-4f52-4d32-9b2a-0f0b5a8b1000` | RideManager 通知响应，Notify |
 | default_sync_window_hours | `24.0` | 默认最近同步窗口 |
 | max_page_size | `100` | 单页最大记录数 |
-| notify_chunk_bytes | `180` | BLE 通知分片大小 |
+| notify_chunk_bytes | `180` | BLE 通知分片信封的目标最大字节数 |
 | max_request_bytes | `16384` | 单个请求最大字节数 |
 
 Linux/RK3588 使用 BlueZ 作为蓝牙适配器基础；macOS 使用 CoreBluetooth Peripheral 方向。当前 C# 主程序已经提供统一协议处理入口和平台宿主边界，平台外设宿主需要把 RX 特征写入内容传给 `AppSyncProtocolHandler`，再把返回 JSON 通过 TX 特征通知给手机端。
 
 ## 帧格式
 
-所有请求和响应都是 UTF-8 JSON。一个完整 JSON 文档为一帧；BLE 通知可按 `notify_chunk_bytes` 分片发送，手机端按完整 JSON 边界重组。
+请求是 UTF-8 JSON。响应的完整 AppSync JSON 会通过 TX notify 发送为一组可重组的 UTF-8 JSON 分片；手机端必须先按分片信封重组，再解析里面的完整响应 JSON。
 
 请求通用格式：
 
@@ -52,6 +52,28 @@ Linux/RK3588 使用 BlueZ 作为蓝牙适配器基础；macOS 使用 CoreBluetoo
   "payload": {}
 }
 ```
+
+TX 通知分片信封：
+
+```json
+{
+  "v": 1,
+  "t": "chunk",
+  "id": "42",
+  "i": 0,
+  "n": 3,
+  "b": 512,
+  "d": "base64-response-bytes"
+}
+```
+
+- `id`：同一条响应的分片消息编号。
+- `i`：当前分片序号，从 `0` 开始。
+- `n`：该响应总分片数。
+- `b`：完整响应 UTF-8 字节数。
+- `d`：本片响应字节的 Base64。
+
+手机端收到同一 `id` 的 `n` 片后，按 `i` 排序，Base64 解码并拼接，校验拼接后的字节数等于 `b`，再按 UTF-8 JSON 解析为上面的响应通用格式。`sensorSnapshots[].values` 会保留数据库中写入的所有传感器指标，例如 `heart_rate`、`breathing_rate`、`distance_cm`、`speed_kmh`、`cadence_rpm` 等。
 
 错误响应：
 

@@ -20,6 +20,19 @@ public sealed class RadarBluetoothReader : ISensorReader, IAsyncDisposable
     }
 
     /// <summary>
+    /// 提前启动后台 BLE 雷达连接。
+    /// </summary>
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            return;
+        }
+
+        await EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 读取雷达心率、呼吸率和距离数据。
     /// </summary>
     public async Task<SensorSnapshot?> ReadAsync(CancellationToken cancellationToken)

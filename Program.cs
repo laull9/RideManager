@@ -13,93 +13,99 @@ var isCameraLiveTest = args.Contains("livetest", StringComparer.OrdinalIgnoreCas
 var isAppSyncLiveTest = args.Contains("liveapp", StringComparer.OrdinalIgnoreCase)
     || args.Contains("liveappsync", StringComparer.OrdinalIgnoreCase);
 
-if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
-{
-    var liveOptions = new RadarLiveTestOptions(
-        ParseDuration(ReadOption(args, "--duration")),
-        args.Contains("--headless", StringComparer.OrdinalIgnoreCase),
-        args.Contains("--simulate", StringComparer.OrdinalIgnoreCase),
-        ParsePort(ReadOption(args, "--port"), 5089));
-
-    await new RadarLiveTester(options.Sensors.Radar).RunAsync(liveOptions, CancellationToken.None);
-    return;
-}
-
-if (isAppSyncLiveTest)
-{
-    var liveOptions = new AppSyncLiveTestOptions(
-        ParseDuration(ReadOption(args, "--duration")),
-        args.Contains("--require-database", StringComparer.OrdinalIgnoreCase));
-
-    await new AppSyncLiveTester(options.AppSync, options.Database).RunAsync(liveOptions, CancellationToken.None);
-    return;
-}
-
-if (isCameraLiveTest)
-{
-    options = options with
-    {
-        Cameras = CameraPipelineFactory.PrepareLiveTestCameraOptions(
-            options.Cameras,
-            ParseOptionalCamera(ReadOption(args, "--camera")),
-            ReadOption(args, "--source"))
-    };
-}
-
-var runtimeSelector = new ModelRuntimeSelector(options.Models);
-var cameraPipelines = CameraPipelineFactory.CreateCameraPipelines(options.Cameras, runtimeSelector);
-await using var cameraDisposer = new AsyncPipelineDisposer(cameraPipelines);
-
-if (isCameraLiveTest)
-{
-    var liveOptions = new CameraLiveTestOptions(
-        ParseOptionalCamera(ReadOption(args, "--camera")),
-        ParseDuration(ReadOption(args, "--duration")),
-        args.Contains("--headless", StringComparer.OrdinalIgnoreCase));
-
-    await new CameraLiveTester(cameraPipelines).RunAsync(liveOptions, CancellationToken.None);
-    return;
-}
-
-await using var radarReader = new RadarBluetoothReader(options.Sensors.Radar);
-await using var appSyncServer = new AppSyncServer(options.AppSync, options.Database);
-await appSyncServer.StartAsync(CancellationToken.None);
-
-var sensorReaders = new ISensorReader[]
-{
-    radarReader,
-    new GyroSensorReader(options.Sensors.Gyro)
-};
-
-var supervisor = new RideSupervisor(
-    cameraPipelines,
-    sensorReaders,
-    new NoopBrakeController(options.Actuators.Brake),
-    new NoopSpeakerNotifier(options.Actuators.Speaker),
-    new SafetyDecisionEngine(),
-    new PostgresDetectionEventWriter(options.Database));
-
-var supervisorDuration = ParseDuration(ReadOption(args, "--duration"));
-using var runCancellation = supervisorDuration is { } value
-    ? new CancellationTokenSource(value)
-    : new CancellationTokenSource();
-ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+using var shutdown = new CancellationTokenSource();
+ConsoleCancelEventHandler shutdownHandler = (_, eventArgs) =>
 {
     eventArgs.Cancel = true;
-    runCancellation.Cancel();
+    shutdown.Cancel();
 };
 
-Console.CancelKeyPress += cancelHandler;
+Console.CancelKeyPress += shutdownHandler;
 try
 {
+    if (args.Contains("liveradar", StringComparer.OrdinalIgnoreCase))
+    {
+        var liveOptions = new RadarLiveTestOptions(
+            ParseDuration(ReadOption(args, "--duration")),
+            args.Contains("--headless", StringComparer.OrdinalIgnoreCase),
+            args.Contains("--simulate", StringComparer.OrdinalIgnoreCase),
+            ParsePort(ReadOption(args, "--port"), 5089));
+
+        await new RadarLiveTester(options.Sensors.Radar).RunAsync(liveOptions, shutdown.Token);
+        return;
+    }
+
+    if (isAppSyncLiveTest)
+    {
+        var liveOptions = new AppSyncLiveTestOptions(
+            ParseDuration(ReadOption(args, "--duration")),
+            args.Contains("--require-database", StringComparer.OrdinalIgnoreCase));
+
+        await new AppSyncLiveTester(options.AppSync, options.Database).RunAsync(liveOptions, shutdown.Token);
+        return;
+    }
+
+    if (isCameraLiveTest)
+    {
+        options = options with
+        {
+            Cameras = CameraPipelineFactory.PrepareLiveTestCameraOptions(
+                options.Cameras,
+                ParseOptionalCamera(ReadOption(args, "--camera")),
+                ReadOption(args, "--source"))
+        };
+    }
+
+    var runtimeSelector = new ModelRuntimeSelector(options.Models);
+    var cameraPipelines = CameraPipelineFactory.CreateCameraPipelines(options.Cameras, runtimeSelector);
+    await using var cameraDisposer = new AsyncPipelineDisposer(cameraPipelines);
+
+    if (isCameraLiveTest)
+    {
+        var liveOptions = new CameraLiveTestOptions(
+            ParseOptionalCamera(ReadOption(args, "--camera")),
+            ParseDuration(ReadOption(args, "--duration")),
+            args.Contains("--headless", StringComparer.OrdinalIgnoreCase));
+
+        await new CameraLiveTester(cameraPipelines).RunAsync(liveOptions, shutdown.Token);
+        return;
+    }
+
+    await using var radarReader = new RadarBluetoothReader(options.Sensors.Radar);
+    await using var appSyncServer = new AppSyncServer(options.AppSync, options.Database);
+    await Task.WhenAll(
+        radarReader.StartAsync(shutdown.Token),
+        appSyncServer.StartAsync(shutdown.Token));
+
+    var sensorReaders = new ISensorReader[]
+    {
+        radarReader,
+        new GyroSensorReader(options.Sensors.Gyro)
+    };
+
+    var supervisor = new RideSupervisor(
+        cameraPipelines,
+        sensorReaders,
+        new NoopBrakeController(options.Actuators.Brake),
+        new NoopSpeakerNotifier(options.Actuators.Speaker),
+        new SafetyDecisionEngine(),
+        new PostgresDetectionEventWriter(options.Database));
+
+    var supervisorDuration = ParseDuration(ReadOption(args, "--duration"));
+    using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+    if (supervisorDuration is { } value)
+    {
+        runCancellation.CancelAfter(value);
+    }
+
     await supervisor.RunAsync(runCancellation.Token);
 }
-catch (OperationCanceledException) when (runCancellation.IsCancellationRequested)
+catch (OperationCanceledException)
 {
 }
 finally
 {
-    Console.CancelKeyPress -= cancelHandler;
+    Console.CancelKeyPress -= shutdownHandler;
 }
 
 /// <summary>

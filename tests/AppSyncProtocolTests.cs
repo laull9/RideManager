@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using RideManager.AppSync;
 using RideManager.Utils;
@@ -69,6 +70,71 @@ public sealed class AppSyncProtocolTests
     }
 
     [Fact]
+    public async Task HandleAsync_SyncRecent_IncludesSensorSnapshotValues()
+    {
+        var repository = new FakeRepository
+        {
+            RecentPage = new AppSyncPage(
+                new[]
+                {
+                    new AppSyncDecisionRecord(
+                        Guid.NewGuid(),
+                        DateTimeOffset.UtcNow,
+                        "Normal",
+                        JsonDocument.Parse("{}").RootElement.Clone(),
+                        Array.Empty<AppSyncCameraFindingRecord>(),
+                        new[]
+                        {
+                            new AppSyncSensorSnapshotRecord(
+                                Guid.NewGuid(),
+                                "RADAR",
+                                DateTimeOffset.UtcNow,
+                                JsonDocument.Parse("{\"heart_rate\":72,\"speed_kmh\":18.5,\"cadence_rpm\":86}").RootElement.Clone())
+                        })
+                },
+                null,
+                false)
+        };
+        var handler = new AppSyncProtocolHandler(CreateOptions(), repository);
+
+        var response = await handler.HandleAsync(
+            "{\"v\":1,\"id\":\"sync-values\",\"type\":\"sync_recent\",\"payload\":{}}",
+            CancellationToken.None);
+
+        using var document = JsonDocument.Parse(response);
+        var values = document.RootElement
+            .GetProperty("payload")
+            .GetProperty("items")[0]
+            .GetProperty("sensorSnapshots")[0]
+            .GetProperty("values");
+        Assert.Equal(72, values.GetProperty("heart_rate").GetDouble());
+        Assert.Equal(18.5, values.GetProperty("speed_kmh").GetDouble());
+        Assert.Equal(86, values.GetProperty("cadence_rpm").GetDouble());
+    }
+
+    [Fact]
+    public void NotificationFramer_RoundTripsLongResponse()
+    {
+        var response = "{\"v\":1,\"id\":\"sync\",\"type\":\"sync_recent\",\"status\":\"ok\",\"payload\":{\"items\":[{\"sensorSnapshots\":[{\"values\":{\"heart_rate\":72,\"speed_kmh\":18.5,\"cadence_rpm\":86}}]}]}}";
+
+        var chunks = AppSyncNotificationFramer.CreateChunks(response, 96);
+
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, chunk => Assert.True(chunk.Length <= 96));
+        var ordered = chunks
+            .Select(chunk => JsonDocument.Parse(chunk).RootElement.Clone())
+            .OrderBy(chunk => chunk.GetProperty("i").GetInt32())
+            .ToArray();
+        var reassembled = ordered
+            .Select(chunk => Convert.FromBase64String(chunk.GetProperty("d").GetString()!))
+            .SelectMany(value => value)
+            .ToArray();
+        Assert.Equal(response, Encoding.UTF8.GetString(reassembled));
+        Assert.All(ordered, chunk => Assert.Equal(ordered.Length, chunk.GetProperty("n").GetInt32()));
+        Assert.All(ordered, chunk => Assert.Equal(Encoding.UTF8.GetByteCount(response), chunk.GetProperty("b").GetInt32()));
+    }
+
+    [Fact]
     public void Cursor_RoundTrips()
     {
         var expected = new AppSyncCursor(DateTimeOffset.Parse("2026-06-10T10:20:30Z"), Guid.NewGuid());
@@ -95,6 +161,8 @@ public sealed class AppSyncProtocolTests
 
     private sealed class FakeRepository : IAppSyncRepository
     {
+        public AppSyncPage? RecentPage { get; set; }
+
         public int LastRecentLimit { get; private set; }
 
         public DateTimeOffset? LastRecentSince { get; private set; }
@@ -111,7 +179,7 @@ public sealed class AppSyncProtocolTests
         {
             LastRecentSince = since;
             LastRecentLimit = limit;
-            return Task.FromResult(new AppSyncPage(Array.Empty<AppSyncDecisionRecord>(), null, false));
+            return Task.FromResult(RecentPage ?? new AppSyncPage(Array.Empty<AppSyncDecisionRecord>(), null, false));
         }
 
         public Task<AppSyncPage> GetMoreDecisionsAsync(

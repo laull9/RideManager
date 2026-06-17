@@ -366,15 +366,10 @@ public sealed class MacOSCoreBluetoothAppSyncPeripheral : IAppSyncPeripheral
 
         private void EnqueueResponse(string response)
         {
-            var bytes = Encoding.UTF8.GetBytes(response);
-            var chunkSize = Math.Clamp(_options.NotifyChunkBytes, 20, 4096);
             lock (_notifySync)
             {
-                for (var offset = 0; offset < bytes.Length; offset += chunkSize)
+                foreach (var chunk in AppSyncNotificationFramer.CreateChunks(response, _options.NotifyChunkBytes))
                 {
-                    var length = Math.Min(chunkSize, bytes.Length - offset);
-                    var chunk = new byte[length];
-                    Buffer.BlockCopy(bytes, offset, chunk, 0, length);
                     _pendingNotifications.Enqueue(chunk);
                 }
 

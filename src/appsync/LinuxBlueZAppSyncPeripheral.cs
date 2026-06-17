@@ -90,9 +90,11 @@ public sealed class LinuxBlueZAppSyncPeripheral : IAppSyncPeripheral
         {
             try
             {
-                await _advertisingManager.UnregisterAdvertisementAsync(AdvertisementPath).ConfigureAwait(false);
+                await _advertisingManager.UnregisterAdvertisementAsync(AdvertisementPath)
+                    .WaitAsync(TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is DBusException or InvalidOperationException or DisconnectedException)
+            catch (Exception ex) when (ex is DBusException or InvalidOperationException or DisconnectedException or TimeoutException)
             {
                 Console.WriteLine($"App sync bluetooth advertisement unregister warning: {ex.Message}");
             }
@@ -106,9 +108,11 @@ public sealed class LinuxBlueZAppSyncPeripheral : IAppSyncPeripheral
         {
             try
             {
-                await _gattManager.UnregisterApplicationAsync(AppPath).ConfigureAwait(false);
+                await _gattManager.UnregisterApplicationAsync(AppPath)
+                    .WaitAsync(TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is DBusException or InvalidOperationException or DisconnectedException)
+            catch (Exception ex) when (ex is DBusException or InvalidOperationException or DisconnectedException or TimeoutException)
             {
                 Console.WriteLine($"App sync bluetooth GATT unregister warning: {ex.Message}");
             }
@@ -468,10 +472,9 @@ public sealed class LinuxBlueZAppSyncPeripheral : IAppSyncPeripheral
                 return;
             }
 
-            for (var offset = 0; offset < data.Length; offset += _notifyChunkBytes)
+            foreach (var chunk in AppSyncNotificationFramer.CreateChunks(response, _notifyChunkBytes))
             {
-                var length = Math.Min(_notifyChunkBytes, data.Length - offset);
-                _value = data[offset..(offset + length)];
+                _value = chunk;
                 PropertiesChanged?.Invoke(PropertyChanges.ForProperty("Value", _value));
                 await Task.Yield();
             }
