@@ -267,6 +267,88 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public void ConfigLoader_ParsesRearFisheyeRiskOptions()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [models]
+            backend = "onnx"
+            directory = "models"
+
+            [[cameras]]
+            id = "CAM_BACK"
+            enabled = true
+            device = "synthetic"
+            model = "yolo26n.onnx"
+            width = 1280
+            height = 720
+            input_width = 640
+            input_height = 640
+            fps = 30
+            confidence_threshold = 0.35
+            fisheye_fov_degrees = 180
+            fisheye_strength = 0.75
+            rear_center_danger_angle_degrees = 50
+            rear_edge_warning_min_score = 0.22
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+
+            var camera = Assert.Single(config.Cameras);
+            Assert.Equal(CameraId.CamBack, camera.Id);
+            Assert.Equal(180.0, camera.Risk.FisheyeFovDegrees, 6);
+            Assert.Equal(0.75, camera.Risk.FisheyeStrength, 6);
+            Assert.Equal(50.0, camera.Risk.RearCenterDangerAngleDegrees, 6);
+            Assert.Equal(0.22, camera.Risk.RearEdgeWarningMinScore, 6);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
+    public void ConfigLoader_DefaultsBackCameraFisheyeFovTo180Degrees()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [models]
+            backend = "onnx"
+            directory = "models"
+
+            [[cameras]]
+            id = "CAM_BACK"
+            enabled = true
+            device = "synthetic"
+            model = "yolo26n.onnx"
+            width = 1280
+            height = 720
+            input_width = 640
+            input_height = 640
+            fps = 30
+            confidence_threshold = 0.35
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+
+            var camera = Assert.Single(config.Cameras);
+            Assert.Equal(CameraId.CamBack, camera.Id);
+            Assert.Equal(180.0, camera.Risk.FisheyeFovDegrees, 6);
+            Assert.Equal(1.0, camera.Risk.FisheyeStrength, 6);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
     public void CreateAnalyzer_UsesRknnWrapperForYuNetAndPfldWhenTomlBackendIsRknn()
     {
         var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");

@@ -67,7 +67,7 @@ try
             ParseDuration(ReadOption(args, "--duration")),
             args.Contains("--headless", StringComparer.OrdinalIgnoreCase));
 
-        await new CameraLiveTester(cameraPipelines).RunAsync(liveOptions, shutdown.Token);
+        await new CameraLiveTester(cameraPipelines, CreateCameraRiskMap(options.Cameras)).RunAsync(liveOptions, shutdown.Token);
         return;
     }
 
@@ -88,7 +88,7 @@ try
         sensorReaders,
         new NoopBrakeController(options.Actuators.Brake),
         new NoopSpeakerNotifier(options.Actuators.Speaker),
-        new SafetyDecisionEngine(),
+        new SafetyDecisionEngine(cameraRiskOptions: CreateCameraRiskMap(options.Cameras)),
         new PostgresDetectionEventWriter(options.Database));
 
     var supervisorDuration = ParseDuration(ReadOption(args, "--duration"));
@@ -171,6 +171,14 @@ static int ParsePort(string? value, int defaultPort)
     return int.TryParse(value, out var port) && port is > 0 and < 65536
         ? port
         : throw new ArgumentException($"Invalid port: {value}");
+}
+
+/// <summary>
+/// 创建供安全决策引擎使用的摄像头风险参数表。
+/// </summary>
+static IReadOnlyDictionary<CameraId, CameraRiskOptions> CreateCameraRiskMap(IReadOnlyList<CameraOptions> cameras)
+{
+    return cameras.ToDictionary(camera => camera.Id, camera => camera.Risk);
 }
 
 /// <summary>

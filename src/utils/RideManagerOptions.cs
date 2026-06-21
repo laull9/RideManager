@@ -1,4 +1,5 @@
 using RideManager.Camera;
+using RideManager.Core;
 using RideManager.Models;
 
 namespace RideManager.Utils;
@@ -34,6 +35,11 @@ public sealed record CameraOptions(
     /// 获取当前摄像头要运行的模型列表；为空时使用旧版单模型字段。
     /// </summary>
     public IReadOnlyList<CameraModelOptions> Models { get; init; } = Array.Empty<CameraModelOptions>();
+
+    /// <summary>
+    /// 获取当前摄像头参与主控风险决策时使用的算法参数。
+    /// </summary>
+    public CameraRiskOptions Risk { get; init; } = CameraRiskOptions.ForCamera(Id);
 
     /// <summary>
     /// 获取实际运行的模型列表，兼容旧版单模型配置。

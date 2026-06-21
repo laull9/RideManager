@@ -49,6 +49,10 @@ input_height = 640
 fps = 30
 confidence_threshold = 0.35
 pixel_format = "MJPG"
+fisheye_fov_degrees = 180
+fisheye_strength = 1.0
+rear_center_danger_angle_degrees = 45
+rear_edge_warning_min_score = 0.18
 
 [sensors.radar]
 enabled = true

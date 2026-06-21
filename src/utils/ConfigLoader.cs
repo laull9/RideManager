@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Text.Json;
 using RideManager.Camera;
+using RideManager.Core;
 using RideManager.Models;
 using Tomlyn;
 
@@ -86,8 +87,10 @@ public static class ConfigLoader
         var primaryInputHeight = modelOptions.FirstOrDefault()?.InputHeight ?? value.InputHeight;
         var primaryThreshold = modelOptions.FirstOrDefault()?.ConfidenceThreshold ?? value.ConfidenceThreshold;
 
+        var cameraId = ParseCameraId(value.Id);
+
         return new CameraOptions(
-            ParseCameraId(value.Id),
+            cameraId,
             value.Enabled,
             value.Device,
             primaryModel,
@@ -99,7 +102,8 @@ public static class ConfigLoader
             Math.Clamp(primaryThreshold, 0.0, 1.0),
             value.PixelFormat)
         {
-            Models = modelOptions
+            Models = modelOptions,
+            Risk = ParseCameraRisk(cameraId, value)
         };
     }
 
@@ -157,6 +161,27 @@ public static class ConfigLoader
             CropWidth = width,
             CropHeight = height
         };
+    }
+
+    /// <summary>
+    /// 解析摄像头风险算法参数，并为后向鱼眼摄像头提供可用默认值。
+    /// </summary>
+    private static CameraRiskOptions ParseCameraRisk(CameraId cameraId, CameraToml value)
+    {
+        var defaults = CameraRiskOptions.ForCamera(cameraId);
+        return new CameraRiskOptions(
+            ClampRange(value.FisheyeFovDegrees ?? defaults.FisheyeFovDegrees, 1.0, 220.0),
+            ClampRange(value.FisheyeStrength ?? defaults.FisheyeStrength, 0.0, 1.0),
+            ClampRange(value.RearCenterDangerAngleDegrees ?? defaults.RearCenterDangerAngleDegrees, 1.0, 120.0),
+            ClampRange(value.RearEdgeWarningMinScore ?? defaults.RearEdgeWarningMinScore, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// 将普通数值限制在指定区间。
+    /// </summary>
+    private static double ClampRange(double value, double min, double max)
+    {
+        return double.IsFinite(value) ? Math.Clamp(value, min, max) : min;
     }
 
     /// <summary>
@@ -318,6 +343,14 @@ public static class ConfigLoader
         public string PixelFormat { get; set; } = "MJPG";
 
         public List<CameraModelToml> Models { get; set; } = new();
+
+        public double? FisheyeFovDegrees { get; set; }
+
+        public double? FisheyeStrength { get; set; }
+
+        public double? RearCenterDangerAngleDegrees { get; set; }
+
+        public double? RearEdgeWarningMinScore { get; set; }
     }
 
     /// <summary>

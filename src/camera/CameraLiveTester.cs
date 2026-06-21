@@ -11,13 +11,17 @@ namespace RideManager.Camera;
 public sealed class CameraLiveTester
 {
     private readonly IReadOnlyList<CameraPipeline> _pipelines;
+    private readonly IReadOnlyDictionary<CameraId, CameraRiskOptions> _cameraRiskOptions;
 
     /// <summary>
     /// 创建摄像头 live 测试器。
     /// </summary>
-    public CameraLiveTester(IReadOnlyList<CameraPipeline> pipelines)
+    public CameraLiveTester(
+        IReadOnlyList<CameraPipeline> pipelines,
+        IReadOnlyDictionary<CameraId, CameraRiskOptions>? cameraRiskOptions = null)
     {
         _pipelines = pipelines;
+        _cameraRiskOptions = cameraRiskOptions ?? new Dictionary<CameraId, CameraRiskOptions>();
     }
 
     /// <summary>
@@ -49,6 +53,7 @@ public sealed class CameraLiveTester
                 activeGate,
                 previewServer,
                 lastConsoleByCamera,
+                _cameraRiskOptions,
                 cancellationToken))
             .ToArray();
         await Task.WhenAll(workers);
@@ -65,9 +70,10 @@ public sealed class CameraLiveTester
         object activeGate,
         CameraLivePreviewServer? previewServer,
         ConcurrentDictionary<CameraId, DateTimeOffset> lastConsoleByCamera,
+        IReadOnlyDictionary<CameraId, CameraRiskOptions> cameraRiskOptions,
         CancellationToken cancellationToken)
     {
-        var decisionEngine = new SafetyDecisionEngine();
+        var decisionEngine = new SafetyDecisionEngine(cameraRiskOptions: cameraRiskOptions);
         while (!cancellationToken.IsCancellationRequested && (stopAt is null || DateTimeOffset.UtcNow < stopAt))
         {
             var activeSnapshot = GetActiveSnapshot(activeCameras, activeGate);

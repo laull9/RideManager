@@ -143,6 +143,65 @@ public sealed class SafetyDecisionEngineTests
     }
 
     [Fact]
+    public void Decide_WhenBackFisheyeCenterObjectApproaches_ReturnsDanger()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
+        var engine = new SafetyDecisionEngine(
+            timeProvider,
+            new Dictionary<CameraId, CameraRiskOptions>
+            {
+                [CameraId.CamBack] = new CameraRiskOptions(180.0, 1.0, 45.0, 0.18)
+            });
+
+        engine.Decide(
+            new[] { CameraId.CamBack },
+            new[] { CreateFinding(CameraId.CamBack, "motorcycle", 0.88, timeProvider.GetUtcNow(), 0.18, 0.18, 0.41, 0.56) },
+            Array.Empty<SensorSnapshot>());
+
+        timeProvider.Advance(TimeSpan.FromSeconds(6));
+        engine.Decide(
+            new[] { CameraId.CamBack },
+            new[] { CreateFinding(CameraId.CamBack, "motorcycle", 0.92, timeProvider.GetUtcNow(), 0.28, 0.28, 0.36, 0.62) },
+            Array.Empty<SensorSnapshot>());
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        var decision = engine.Decide(
+            new[] { CameraId.CamBack },
+            new[] { CreateFinding(CameraId.CamBack, "motorcycle", 0.95, timeProvider.GetUtcNow(), 0.38, 0.34, 0.31, 0.60) },
+            Array.Empty<SensorSnapshot>());
+
+        Assert.Equal(SafetyRiskLevel.Danger, decision.RiskLevel);
+
+        var assessment = Assert.Single(decision.CameraRiskAssessments);
+        Assert.Equal(CameraId.CamBack, assessment.CameraId);
+        Assert.Equal(SafetyRiskLevel.Danger, assessment.RiskLevel);
+    }
+
+    [Fact]
+    public void Decide_WhenBackFisheyeEdgeObjectIsLarge_ReturnsWarningOnly()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
+        var engine = new SafetyDecisionEngine(
+            timeProvider,
+            new Dictionary<CameraId, CameraRiskOptions>
+            {
+                [CameraId.CamBack] = new CameraRiskOptions(180.0, 1.0, 45.0, 0.18)
+            });
+
+        var decision = engine.Decide(
+            new[] { CameraId.CamBack },
+            new[] { CreateFinding(CameraId.CamBack, "car", 0.96, timeProvider.GetUtcNow(), 0.36, 0.36, 0.00, 0.58) },
+            Array.Empty<SensorSnapshot>());
+
+        Assert.Equal(SafetyRiskLevel.Warning, decision.RiskLevel);
+
+        var assessment = Assert.Single(decision.CameraRiskAssessments);
+        Assert.Equal(CameraId.CamBack, assessment.CameraId);
+        Assert.Equal(SafetyRiskLevel.Warning, assessment.RiskLevel);
+        Assert.True(assessment.CurrentScore < 0.82);
+    }
+
+    [Fact]
     public void Decide_WhenOnlyTinyLowRiskObjectExists_StaysNormal()
     {
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
