@@ -99,6 +99,11 @@ public sealed class SystemSpeakerNotifier : ISpeakerNotifier
         }
 
         startInfo.ArgumentList.Add(assetPath);
+        foreach (var argument in player.ArgumentsAfterPath)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         return Process.Start(startInfo);
     }
 
@@ -195,9 +200,10 @@ internal static class SpeakerPlayerResolver
 {
     private static readonly SpeakerPlayer[] LinuxPlayers =
     {
-        new("aplay", Array.Empty<string>()),
-        new("paplay", Array.Empty<string>()),
-        new("ffplay", new[] { "-nodisp", "-autoexit", "-loglevel", "quiet" })
+        new("aplay", Array.Empty<string>(), Array.Empty<string>()),
+        new("paplay", Array.Empty<string>(), Array.Empty<string>()),
+        new("ffmpeg", new[] { "-re", "-i" }, new[] { "-ac", "2", "-ar", "48000", "-sample_fmt", "s16", "-f", "alsa", "plughw:1,0" }),
+        new("ffplay", new[] { "-nodisp", "-autoexit", "-loglevel", "quiet" }, Array.Empty<string>())
     };
 
     /// <summary>
@@ -207,12 +213,12 @@ internal static class SpeakerPlayerResolver
     {
         if (!string.IsNullOrWhiteSpace(configuredCommand))
         {
-            return new SpeakerPlayer(configuredCommand, Array.Empty<string>());
+            return ResolveConfiguredCommand(configuredCommand);
         }
 
         if (OperatingSystem.IsMacOS() && FindExecutable("afplay") is { } afplay)
         {
-            return new SpeakerPlayer(afplay, Array.Empty<string>());
+            return new SpeakerPlayer(afplay, Array.Empty<string>(), Array.Empty<string>());
         }
 
         foreach (var player in LinuxPlayers)
@@ -224,6 +230,80 @@ internal static class SpeakerPlayerResolver
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolves a configured player command, optionally using {asset} as the audio-file placeholder.
+    /// </summary>
+    private static SpeakerPlayer? ResolveConfiguredCommand(string configuredCommand)
+    {
+        var tokens = SplitCommandLine(configuredCommand);
+        if (tokens.Count == 0)
+        {
+            return null;
+        }
+
+        var assetIndex = tokens.FindIndex(token => string.Equals(token, "{asset}", StringComparison.Ordinal));
+        if (assetIndex < 0)
+        {
+            return new SpeakerPlayer(tokens[0], tokens.Skip(1).ToArray(), Array.Empty<string>());
+        }
+
+        if (assetIndex == 0)
+        {
+            return null;
+        }
+
+        return new SpeakerPlayer(
+            tokens[0],
+            tokens.Skip(1).Take(assetIndex - 1).ToArray(),
+            tokens.Skip(assetIndex + 1).ToArray());
+    }
+
+    /// <summary>
+    /// Splits a simple shell-style command into process arguments.
+    /// </summary>
+    private static List<string> SplitCommandLine(string commandLine)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+
+        foreach (var character in commandLine)
+        {
+            if (character == '\'' && !inDoubleQuote)
+            {
+                inSingleQuote = !inSingleQuote;
+                continue;
+            }
+
+            if (character == '"' && !inSingleQuote)
+            {
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && !inSingleQuote && !inDoubleQuote)
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
     }
 
     /// <summary>
@@ -248,4 +328,7 @@ internal static class SpeakerPlayerResolver
 /// <summary>
 /// Represents a command-line audio player.
 /// </summary>
-internal sealed record SpeakerPlayer(string Command, IReadOnlyList<string> ArgumentsBeforePath);
+internal sealed record SpeakerPlayer(
+    string Command,
+    IReadOnlyList<string> ArgumentsBeforePath,
+    IReadOnlyList<string> ArgumentsAfterPath);

@@ -98,7 +98,7 @@ enabled = true
 asset_directory = "assests"
 warning_file = "warning.wav"
 danger_file = "danger.wav"
-player_command = ""
+player_command = "ffmpeg -re -i {asset} -ac 2 -ar 48000 -sample_fmt s16 -f alsa plughw:1,0"
 min_interval_seconds = 3.0
 
 [app_sync]

@@ -95,6 +95,12 @@ player_command = ""
 min_interval_seconds = 3.0
 ```
 
+RK3588/开发板如果 `ffplay` 不可用，可直接指定 `ffmpeg` 输出到 ALSA：
+
+```toml
+player_command = "ffmpeg -re -i {asset} -ac 2 -ar 48000 -sample_fmt s16 -f alsa plughw:1,0"
+```
+
 播放规则：
 
 - `Warning` 播放 `warning_file`。
@@ -105,8 +111,8 @@ min_interval_seconds = 3.0
 
 播放器选择：
 
-- `player_command` 非空时直接使用该命令。
+- `player_command` 非空时直接使用该命令；需要把音频文件放在命令中间时，用 `{asset}` 作为占位符。
 - macOS 联调环境自动尝试 `afplay`。
-- Linux/RK3588 自动尝试 `aplay`、`paplay`、`ffplay`。
+- Linux/RK3588 自动尝试 `aplay`、`paplay`、`ffmpeg`、`ffplay`。
 
 音频文件不存在或系统找不到播放器时，只输出一次 warning，不中断主控循环。当前仓库保留 `assests/` 目录作为音频资源目录；部署时放入 `warning.wav` 和 `danger.wav`，或在配置中改成实际文件名。

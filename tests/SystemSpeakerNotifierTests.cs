@@ -50,4 +50,26 @@ public sealed class SystemSpeakerNotifierTests
 
         Assert.Null(plan);
     }
+
+    [Fact]
+    public void SpeakerPlayerResolver_UsesAssetPlaceholderForFfmpegCommand()
+    {
+        var player = SpeakerPlayerResolver.Resolve("ffmpeg -re -i {asset} -ac 2 -ar 48000 -sample_fmt s16 -f alsa plughw:1,0");
+
+        Assert.NotNull(player);
+        Assert.Equal("ffmpeg", player.Command);
+        Assert.Equal(new[] { "-re", "-i" }, player.ArgumentsBeforePath);
+        Assert.Equal(new[] { "-ac", "2", "-ar", "48000", "-sample_fmt", "s16", "-f", "alsa", "plughw:1,0" }, player.ArgumentsAfterPath);
+    }
+
+    [Fact]
+    public void SpeakerPlayerResolver_KeepsLegacyConfiguredCommandAsExecutable()
+    {
+        var player = SpeakerPlayerResolver.Resolve("/usr/bin/aplay");
+
+        Assert.NotNull(player);
+        Assert.Equal("/usr/bin/aplay", player.Command);
+        Assert.Empty(player.ArgumentsBeforePath);
+        Assert.Empty(player.ArgumentsAfterPath);
+    }
 }
