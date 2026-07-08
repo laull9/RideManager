@@ -9,6 +9,7 @@
 - 如果历史模型或自定义模型仍输出 `lane_line` / `drivable_area`，C# 前向摄像头分析器会过滤这些 finding，不进入 live test 目标列表、风险链路和数据库 finding。
 - 风险分析使用 10 秒时间窗口。前向摄像头不再把同帧多个目标分数相加，而是先筛选中心靠下的碰撞走廊，再取本帧主风险目标；单目标分数综合标签权重、目标框面积距离代理、底部位置和横向中心偏移。
 - `Warning` 表示目标进入过碰撞走廊或当前/近期分数偏高；`Danger` 只在目标非常近且持续存在，或 10 秒窗口内明显接近时触发。历史峰值只保持 Warning，不单独触发 Danger，避免远离目标造成误报。
+- 前向摄像头输出的是单路 `CameraRiskAssessment`；最终 `SafetyRiskLevel` 由 `SafetyRiskFusion` 综合前向、后向和面部疲劳风险后产生。强疲劳与前向 `Warning` 同时出现时会升级为综合 `Danger`。
 - 单摄像头 live test 也会运行同一套风险监测：预览画面左上角显示 `risk/score/recent/delta/peak/labels`，headless 控制台输出同样字段。
 - 正式运行时摄像头打开失败会输出 warning 并禁用该摄像头链路，其他摄像头继续运行。
 - 数据库写入 `safety_decisions`、`camera_frames`、`camera_findings`、`sensor_snapshots`、`sensor_readings`，供前端读取状态、数据与决策。

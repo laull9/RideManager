@@ -96,7 +96,8 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
                 snapshotEntity.Readings.Add(new SensorReadingEntity
                 {
                     Metric = metric,
-                    Value = value
+                    Value = value,
+                    Unit = ResolveMetricUnit(snapshot.SensorName, metric)
                 });
             }
 
@@ -143,5 +144,34 @@ public sealed class PostgresDetectionEventWriter : IDetectionEventWriter
             Camera.CameraId.CamBack => "CAM_BACK",
             _ => "CAM_FRONT"
         };
+    }
+
+    /// <summary>
+    /// Provides display units for known sensor metrics before they are synced to the App.
+    /// </summary>
+    private static string? ResolveMetricUnit(string sensorName, string metric)
+    {
+        if (sensorName.Equals("GYRO", StringComparison.OrdinalIgnoreCase))
+        {
+            return metric.ToLowerInvariant() switch
+            {
+                "roll" or "pitch" or "yaw" => "deg",
+                "accel_x" or "accel_y" or "accel_z" => "m/s2",
+                _ => null
+            };
+        }
+
+        if (sensorName.Equals("RADAR", StringComparison.OrdinalIgnoreCase))
+        {
+            return metric.ToLowerInvariant() switch
+            {
+                "heart_rate" => "bpm",
+                "breathing_rate" => "rpm",
+                "distance_cm" => "cm",
+                _ => null
+            };
+        }
+
+        return null;
     }
 }

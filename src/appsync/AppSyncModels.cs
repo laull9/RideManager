@@ -50,7 +50,17 @@ public sealed record AppSyncSensorSnapshotRecord(
     Guid Id,
     string SensorName,
     DateTimeOffset ObservedAt,
-    JsonElement Values);
+    JsonElement Values,
+    IReadOnlyList<AppSyncSensorReadingRecord> Readings);
+
+/// <summary>
+/// 表示 App 侧展示的一条传感器指标明细。
+/// </summary>
+public sealed record AppSyncSensorReadingRecord(
+    Guid Id,
+    string Metric,
+    double Value,
+    string? Unit);
 
 /// <summary>
 /// 表示 App 设置变更写入结果。

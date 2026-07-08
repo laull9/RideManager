@@ -20,7 +20,9 @@ public sealed class AppSyncProtocolTests
         using var document = JsonDocument.Parse(response);
         Assert.Equal("ok", document.RootElement.GetProperty("status").GetString());
         Assert.Equal("hello-1", document.RootElement.GetProperty("id").GetString());
-        Assert.Equal("RideManager-Test", document.RootElement.GetProperty("payload").GetProperty("deviceName").GetString());
+        var payload = document.RootElement.GetProperty("payload");
+        Assert.Equal("RideManager-Test", payload.GetProperty("deviceName").GetString());
+        Assert.Contains(payload.GetProperty("capabilities").EnumerateArray(), value => value.GetString() == "gyro_sensor");
     }
 
     [Fact]
@@ -87,9 +89,14 @@ public sealed class AppSyncProtocolTests
                         {
                             new AppSyncSensorSnapshotRecord(
                                 Guid.NewGuid(),
-                                "RADAR",
+                                "GYRO",
                                 DateTimeOffset.UtcNow,
-                                JsonDocument.Parse("{\"heart_rate\":72,\"speed_kmh\":18.5,\"cadence_rpm\":86}").RootElement.Clone())
+                                JsonDocument.Parse("{\"roll\":1.2,\"pitch\":-0.4,\"yaw\":3.8,\"accel_x\":0.01,\"accel_y\":0.02,\"accel_z\":9.81}").RootElement.Clone(),
+                                new[]
+                                {
+                                    new AppSyncSensorReadingRecord(Guid.NewGuid(), "roll", 1.2, "deg"),
+                                    new AppSyncSensorReadingRecord(Guid.NewGuid(), "accel_z", 9.81, "m/s2")
+                                })
                         })
                 },
                 null,
@@ -107,9 +114,61 @@ public sealed class AppSyncProtocolTests
             .GetProperty("items")[0]
             .GetProperty("sensorSnapshots")[0]
             .GetProperty("values");
-        Assert.Equal(72, values.GetProperty("heart_rate").GetDouble());
-        Assert.Equal(18.5, values.GetProperty("speed_kmh").GetDouble());
-        Assert.Equal(86, values.GetProperty("cadence_rpm").GetDouble());
+        var readings = document.RootElement
+            .GetProperty("payload")
+            .GetProperty("items")[0]
+            .GetProperty("sensorSnapshots")[0]
+            .GetProperty("readings");
+        Assert.Equal(1.2, values.GetProperty("roll").GetDouble());
+        Assert.Equal(9.81, values.GetProperty("accel_z").GetDouble());
+        Assert.Contains(readings.EnumerateArray(), reading => reading.GetProperty("metric").GetString() == "roll");
+        Assert.Contains(readings.EnumerateArray(), reading => reading.GetProperty("metric").GetString() == "accel_z");
+    }
+
+    [Fact]
+    public void PostgresAppSyncRepository_MapsGyroSensorReadings()
+    {
+        var entity = new Data.SensorSnapshotEntity
+        {
+            Id = Guid.NewGuid(),
+            SensorName = "GYRO",
+            ObservedAt = DateTimeOffset.Parse("2026-07-08T10:00:00Z"),
+            ValuesJson = "{\"roll\":1.2,\"pitch\":-0.4,\"yaw\":3.8,\"accel_z\":9.81}"
+        };
+        entity.Readings.Add(new Data.SensorReadingEntity { Id = Guid.NewGuid(), Metric = "yaw", Value = 3.8, Unit = "deg" });
+        entity.Readings.Add(new Data.SensorReadingEntity { Id = Guid.NewGuid(), Metric = "accel_z", Value = 9.81, Unit = "m/s2" });
+
+        var record = PostgresAppSyncRepository.MapSensorSnapshot(entity);
+
+        Assert.Equal("GYRO", record.SensorName);
+        Assert.Equal(3.8, record.Values.GetProperty("yaw").GetDouble());
+        Assert.Equal(2, record.Readings.Count);
+        Assert.Equal("accel_z", record.Readings[0].Metric);
+        Assert.Equal("yaw", record.Readings[1].Metric);
+    }
+
+    [Fact]
+    public void PostgresAppSyncRepository_MapsStandaloneSensorSnapshotAsSensorOnlyRecord()
+    {
+        var snapshotId = Guid.NewGuid();
+        var entity = new Data.SensorSnapshotEntity
+        {
+            Id = snapshotId,
+            SensorName = "GYRO",
+            ObservedAt = DateTimeOffset.Parse("2026-07-08T10:00:00Z"),
+            ValuesJson = "{\"roll\":1.2,\"pitch\":-0.4,\"yaw\":3.8}"
+        };
+        entity.Readings.Add(new Data.SensorReadingEntity { Id = Guid.NewGuid(), Metric = "roll", Value = 1.2, Unit = "degree" });
+
+        var record = PostgresAppSyncRepository.MapStandaloneSensorSnapshot(entity);
+
+        Assert.Equal(snapshotId, record.Id);
+        Assert.Equal("SensorOnly", record.RiskLevel);
+        Assert.Equal("sensor_snapshot", record.Payload.GetProperty("recordType").GetString());
+        Assert.Equal("GYRO", record.Payload.GetProperty("sensorName").GetString());
+        Assert.Single(record.SensorSnapshots);
+        Assert.Equal("GYRO", record.SensorSnapshots[0].SensorName);
+        Assert.Equal("roll", record.SensorSnapshots[0].Readings[0].Metric);
     }
 
     [Fact]

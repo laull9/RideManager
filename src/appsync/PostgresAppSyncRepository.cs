@@ -35,18 +35,24 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
         }
 
         await using var dbContext = RideManagerDbContext.Create(_options);
-        IQueryable<SafetyDecisionEntity> query = dbContext.SafetyDecisions
+        IQueryable<SafetyDecisionEntity> decisionQuery = dbContext.SafetyDecisions
             .AsNoTracking()
             .Include(value => value.CameraFindings)
             .Include(value => value.SensorSnapshots)
+                .ThenInclude(value => value.Readings)
             .Where(value => value.DecidedAt >= since);
+        IQueryable<SensorSnapshotEntity> standaloneSensorQuery = dbContext.SensorSnapshots
+            .AsNoTracking()
+            .Include(value => value.Readings)
+            .Where(value => value.SafetyDecisionId == null && value.ObservedAt >= since);
 
         if (cursor is not null)
         {
-            query = query.Where(value => value.DecidedAt < cursor.DecidedAt);
+            decisionQuery = decisionQuery.Where(value => value.DecidedAt < cursor.DecidedAt);
+            standaloneSensorQuery = standaloneSensorQuery.Where(value => value.ObservedAt < cursor.DecidedAt);
         }
 
-        return await ReadPageAsync(query, limit, cancellationToken).ConfigureAwait(false);
+        return await ReadPageAsync(decisionQuery, standaloneSensorQuery, limit, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -63,13 +69,18 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
         }
 
         await using var dbContext = RideManagerDbContext.Create(_options);
-        var query = dbContext.SafetyDecisions
+        var decisionQuery = dbContext.SafetyDecisions
             .AsNoTracking()
             .Include(value => value.CameraFindings)
             .Include(value => value.SensorSnapshots)
+                .ThenInclude(value => value.Readings)
             .Where(value => value.DecidedAt < cursor.DecidedAt);
+        var standaloneSensorQuery = dbContext.SensorSnapshots
+            .AsNoTracking()
+            .Include(value => value.Readings)
+            .Where(value => value.SafetyDecisionId == null && value.ObservedAt < cursor.DecidedAt);
 
-        return await ReadPageAsync(query, limit, cancellationToken).ConfigureAwait(false);
+        return await ReadPageAsync(decisionQuery, standaloneSensorQuery, limit, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -111,19 +122,31 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
     /// 读取一页安全决策，并生成下一页游标。
     /// </summary>
     private static async Task<AppSyncPage> ReadPageAsync(
-        IQueryable<SafetyDecisionEntity> query,
+        IQueryable<SafetyDecisionEntity> decisionQuery,
+        IQueryable<SensorSnapshotEntity> standaloneSensorQuery,
         int limit,
         CancellationToken cancellationToken)
     {
-        var entities = await query
+        var decisionEntities = await decisionQuery
             .OrderByDescending(value => value.DecidedAt)
             .Take(limit + 1)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        var hasMore = entities.Count > limit;
-        var pageEntities = entities.Take(limit).ToArray();
-        var items = pageEntities.Select(MapDecision).ToArray();
-        var last = pageEntities.LastOrDefault();
+        var standaloneSensorEntities = await standaloneSensorQuery
+            .OrderByDescending(value => value.ObservedAt)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var combined = decisionEntities
+            .Select(MapDecision)
+            .Concat(standaloneSensorEntities.Select(MapStandaloneSensorSnapshot))
+            .OrderByDescending(value => value.DecidedAt)
+            .ThenByDescending(value => value.Id)
+            .Take(limit + 1)
+            .ToArray();
+        var hasMore = combined.Length > limit;
+        var items = combined.Take(limit).ToArray();
+        var last = items.LastOrDefault();
         var nextCursor = hasMore && last is not null
             ? new AppSyncCursor(last.DecidedAt, last.Id).Encode()
             : null;
@@ -152,6 +175,31 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
     }
 
     /// <summary>
+    /// 将外部服务直接写入的独立传感器快照映射为 App 可复用的同步记录。
+    /// </summary>
+    internal static AppSyncDecisionRecord MapStandaloneSensorSnapshot(SensorSnapshotEntity entity)
+    {
+        return new AppSyncDecisionRecord(
+            entity.Id,
+            entity.ObservedAt,
+            "SensorOnly",
+            ParseJson(CreateStandaloneSensorPayload(entity)),
+            Array.Empty<AppSyncCameraFindingRecord>(),
+            new[] { MapSensorSnapshot(entity) });
+    }
+
+    /// <summary>
+    /// 创建独立传感器快照的轻量负载，方便 App 区分其不是主控决策。
+    /// </summary>
+    private static string CreateStandaloneSensorPayload(SensorSnapshotEntity entity)
+    {
+        var sensorName = JsonEncodedText.Encode(entity.SensorName).ToString();
+        return $$"""
+            {"recordType":"sensor_snapshot","sensorSnapshotId":"{{entity.Id:D}}","sensorName":"{{sensorName}}"}
+            """;
+    }
+
+    /// <summary>
     /// 映射摄像头检测结果。
     /// </summary>
     private static AppSyncCameraFindingRecord MapFinding(CameraFindingEntity entity)
@@ -172,13 +220,29 @@ public sealed class PostgresAppSyncRepository : IAppSyncRepository
     /// <summary>
     /// 映射传感器快照。
     /// </summary>
-    private static AppSyncSensorSnapshotRecord MapSensorSnapshot(SensorSnapshotEntity entity)
+    internal static AppSyncSensorSnapshotRecord MapSensorSnapshot(SensorSnapshotEntity entity)
     {
         return new AppSyncSensorSnapshotRecord(
             entity.Id,
             entity.SensorName,
             entity.ObservedAt,
-            ParseJson(entity.ValuesJson));
+            ParseJson(entity.ValuesJson),
+            entity.Readings
+                .OrderBy(value => value.Metric, StringComparer.OrdinalIgnoreCase)
+                .Select(MapSensorReading)
+                .ToArray());
+    }
+
+    /// <summary>
+    /// 映射传感器指标明细。
+    /// </summary>
+    private static AppSyncSensorReadingRecord MapSensorReading(SensorReadingEntity entity)
+    {
+        return new AppSyncSensorReadingRecord(
+            entity.Id,
+            entity.Metric,
+            entity.Value,
+            entity.Unit);
     }
 
     /// <summary>

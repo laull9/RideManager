@@ -181,7 +181,7 @@ public sealed class SensorSnapshotEntity
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    public Guid SafetyDecisionId { get; set; }
+    public Guid? SafetyDecisionId { get; set; }
 
     public Guid? DeviceId { get; set; }
 

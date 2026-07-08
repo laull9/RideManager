@@ -196,7 +196,7 @@ public sealed class RideManagerDbContext : DbContext
             .HasOne(value => value.SafetyDecision)
             .WithMany(value => value.SensorSnapshots)
             .HasForeignKey(value => value.SafetyDecisionId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.SetNull);
         entity
             .HasOne(value => value.Device)
             .WithMany()

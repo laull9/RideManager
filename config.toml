@@ -77,13 +77,20 @@ python_restart_delay_seconds = 2.0
 [sensors.gyro]
 enabled = false
 transport = "serial"
-address = "/dev/ttyS0"
+address = ""
+baud_rate = 115200
+read_timeout_seconds = 0.2
 
 [actuators.brake]
 enabled = false
 
 [actuators.speaker]
-enabled = false
+enabled = true
+asset_directory = "assests"
+warning_file = "warning.wav"
+danger_file = "danger.wav"
+player_command = ""
+min_interval_seconds = 3.0
 
 [app_sync]
 enabled = true

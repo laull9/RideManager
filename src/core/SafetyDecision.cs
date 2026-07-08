@@ -12,4 +12,5 @@ public sealed record SafetyDecision(
     IReadOnlyList<CameraFinding> CameraFindings,
     IReadOnlyList<SensorSnapshot> SensorSnapshots,
     IReadOnlyList<CameraRiskAssessment> CameraRiskAssessments,
+    CompositeRiskAssessment CompositeRiskAssessment,
     IReadOnlyList<CameraFrameState> CameraFrames);

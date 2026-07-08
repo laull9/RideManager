@@ -55,7 +55,11 @@ public static class ConfigLoader
             new ModelOptions(ModelBackend.Onnx, "models"),
             new SensorOptions(
                 CreateDefaultRadarEndpoint(),
-                new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0, false, "python3", "scripts/ble_radar_stream.py", 8.0, 2.0)),
+                new SensorEndpointOptions(false, "serial", "/dev/ttyS0", string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, false, false, 12.0, 10.0, 2.0, false, "python3", "scripts/ble_radar_stream.py", 8.0, 2.0)
+                {
+                    BaudRate = 115200,
+                    ReadTimeoutSeconds = 0.2
+                }),
             new ActuatorOptions(new ActuatorEndpointOptions(false), new ActuatorEndpointOptions(false)),
             new DatabaseOptions(string.Empty),
             CreateDefaultAppSyncOptions());
@@ -130,7 +134,11 @@ public static class ConfigLoader
             string.IsNullOrWhiteSpace(value.PythonExecutable) ? "python3" : value.PythonExecutable,
             string.IsNullOrWhiteSpace(value.PythonScript) ? "scripts/ble_radar_stream.py" : value.PythonScript,
             value.PythonFallbackTimeoutSeconds <= 0 ? 8.0 : value.PythonFallbackTimeoutSeconds,
-            value.PythonRestartDelaySeconds <= 0 ? value.ReconnectDelaySeconds : value.PythonRestartDelaySeconds);
+            value.PythonRestartDelaySeconds <= 0 ? value.ReconnectDelaySeconds : value.PythonRestartDelaySeconds)
+        {
+            BaudRate = value.BaudRate <= 0 ? 115200 : value.BaudRate,
+            ReadTimeoutSeconds = value.ReadTimeoutSeconds <= 0 ? 0.2 : value.ReadTimeoutSeconds
+        };
     }
 
     /// <summary>
@@ -215,7 +223,13 @@ public static class ConfigLoader
     /// </summary>
     private static ActuatorEndpointOptions ParseActuator(ActuatorEndpointToml value)
     {
-        return new ActuatorEndpointOptions(value.Enabled);
+        return new ActuatorEndpointOptions(
+            value.Enabled,
+            string.IsNullOrWhiteSpace(value.AssetDirectory) ? "assests" : value.AssetDirectory,
+            string.IsNullOrWhiteSpace(value.WarningFile) ? "warning.wav" : value.WarningFile,
+            string.IsNullOrWhiteSpace(value.DangerFile) ? "danger.wav" : value.DangerFile,
+            value.PlayerCommand,
+            value.MinIntervalSeconds <= 0 ? 3.0 : value.MinIntervalSeconds);
     }
 
     /// <summary>
@@ -427,6 +441,10 @@ public static class ConfigLoader
         public double PythonFallbackTimeoutSeconds { get; set; } = 8.0;
 
         public double PythonRestartDelaySeconds { get; set; } = 2.0;
+
+        public int BaudRate { get; set; } = 115200;
+
+        public double ReadTimeoutSeconds { get; set; } = 0.2;
     }
 
     /// <summary>
@@ -445,6 +463,16 @@ public static class ConfigLoader
     private sealed class ActuatorEndpointToml
     {
         public bool Enabled { get; set; }
+
+        public string AssetDirectory { get; set; } = "assests";
+
+        public string WarningFile { get; set; } = "warning.wav";
+
+        public string DangerFile { get; set; } = "danger.wav";
+
+        public string PlayerCommand { get; set; } = string.Empty;
+
+        public double MinIntervalSeconds { get; set; } = 3.0;
     }
 
     /// <summary>

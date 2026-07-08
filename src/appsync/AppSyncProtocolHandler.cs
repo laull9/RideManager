@@ -70,7 +70,7 @@ public sealed class AppSyncProtocolHandler
             ProtocolVersion,
             _options.DefaultSyncWindowHours,
             _options.MaxPageSize,
-            new[] { "sync_recent", "load_more", "update_settings", "ping" });
+            new[] { "sync_recent", "load_more", "update_settings", "ping", "sensor_readings", "gyro_sensor" });
     }
 
     /// <summary>

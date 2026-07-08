@@ -73,7 +73,7 @@ TX 通知分片信封：
 - `b`：完整响应 UTF-8 字节数。
 - `d`：本片响应字节的 Base64。
 
-手机端收到同一 `id` 的 `n` 片后，按 `i` 排序，Base64 解码并拼接，校验拼接后的字节数等于 `b`，再按 UTF-8 JSON 解析为上面的响应通用格式。`sensorSnapshots[].values` 会保留数据库中写入的所有传感器指标，例如 `heart_rate`、`breathing_rate`、`distance_cm`、`speed_kmh`、`cadence_rpm` 等。
+手机端收到同一 `id` 的 `n` 片后，按 `i` 排序，Base64 解码并拼接，校验拼接后的字节数等于 `b`，再按 UTF-8 JSON 解析为上面的响应通用格式。`sensorSnapshots[].values` 会保留数据库中写入的所有传感器指标，例如 `heart_rate`、`breathing_rate`、`distance_cm`、`speed_kmh`、`cadence_rpm`、`roll`、`pitch`、`yaw`、`acc_x`、`gyro_x` 等。`sensorSnapshots[].readings` 会同时提供按指标拆开的明细列表，便于手机端直接画曲线。
 
 错误响应：
 
@@ -110,7 +110,7 @@ TX 通知分片信封：
   "version": 1,
   "defaultSyncWindowHours": 24,
   "maxPageSize": 100,
-  "capabilities": ["sync_recent", "load_more", "update_settings", "ping"]
+  "capabilities": ["sync_recent", "load_more", "update_settings", "ping", "sensor_readings", "gyro_sensor"]
 }
 ```
 
@@ -139,7 +139,28 @@ TX 通知分片信封：
       "riskLevel": "Warning",
       "payload": {},
       "cameraFindings": [],
-      "sensorSnapshots": []
+      "sensorSnapshots": [
+        {
+          "id": "d3e2f9d0-0000-0000-0000-000000000101",
+          "sensorName": "GYRO",
+          "observedAt": "2026-06-10T10:20:30+00:00",
+          "values": {
+            "roll": 1.2,
+            "pitch": -0.4,
+            "yaw": 3.8,
+            "acc_x": 0.01,
+            "acc_y": 0.02,
+            "acc_z": 0.98,
+            "gyro_x": 0.1,
+            "gyro_y": 0.2,
+            "gyro_z": 0.3
+          },
+          "readings": [
+            { "id": "d3e2f9d0-0000-0000-0000-000000000201", "metric": "roll", "value": 1.2, "unit": "degree" },
+            { "id": "d3e2f9d0-0000-0000-0000-000000000202", "metric": "acc_z", "value": 0.98, "unit": "g" }
+          ]
+        }
+      ]
     }
   ],
   "nextCursor": "base64url-cursor",
@@ -212,8 +233,9 @@ App 请求修改设置。当前版本不会直接改写 `config.toml` 或热重�
 2. 连接后订阅 `tx_uuid` 通知，再向 `rx_uuid` 写 `hello`。
 3. 首次同步发送 `sync_recent`，不指定 `hours` 时取最近 24 小时。
 4. 用户下拉或进入历史页时发送 `load_more`。
-5. App 本地用 `id` 去重；服务端分页按倒序返回，历史追加到列表尾部。
-6. 设置修改后展示 `accepted` 状态，并提示需要重启或后续应用。
+5. GYRO 数据从 `sensorSnapshots` 中筛选 `sensorName == "GYRO"`；外部 IMU 写入且未关联安全决策时，服务端会返回 `riskLevel = "SensorOnly"` 的同步记录。建议优先使用 `readings` 画曲线，使用 `values` 做快速状态卡片。
+6. App 本地用 `id` 去重；服务端分页按倒序返回，历史追加到列表尾部。
+7. 设置修改后展示 `accepted` 状态，并提示需要重启或后续应用。
 
 ## 专用 Live Test
 

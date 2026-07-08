@@ -79,15 +79,14 @@ try
 
     var sensorReaders = new ISensorReader[]
     {
-        radarReader,
-        new GyroSensorReader(options.Sensors.Gyro)
+        radarReader
     };
 
     var supervisor = new RideSupervisor(
         cameraPipelines,
         sensorReaders,
         new NoopBrakeController(options.Actuators.Brake),
-        new NoopSpeakerNotifier(options.Actuators.Speaker),
+        new SystemSpeakerNotifier(options.Actuators.Speaker),
         new SafetyDecisionEngine(cameraRiskOptions: CreateCameraRiskMap(options.Cameras)),
         new PostgresDetectionEventWriter(options.Database));
 

@@ -98,7 +98,18 @@ public sealed record SensorEndpointOptions(
     string PythonExecutable,
     string PythonScript,
     double PythonFallbackTimeoutSeconds,
-    double PythonRestartDelaySeconds);
+    double PythonRestartDelaySeconds)
+{
+    /// <summary>
+    /// Gets the serial baud rate for text-line sensors such as the gyro module.
+    /// </summary>
+    public int BaudRate { get; init; } = 115200;
+
+    /// <summary>
+    /// Gets the maximum time to wait for one text-line sensor sample.
+    /// </summary>
+    public double ReadTimeoutSeconds { get; init; } = 0.2;
+}
 
 /// <summary>
 /// 表示所有执行器的配置。
@@ -108,7 +119,13 @@ public sealed record ActuatorOptions(ActuatorEndpointOptions Brake, ActuatorEndp
 /// <summary>
 /// 表示单个执行器端点的配置。
 /// </summary>
-public sealed record ActuatorEndpointOptions(bool Enabled);
+public sealed record ActuatorEndpointOptions(
+    bool Enabled,
+    string AssetDirectory = "assests",
+    string WarningFile = "warning.wav",
+    string DangerFile = "danger.wav",
+    string PlayerCommand = "",
+    double MinIntervalSeconds = 3.0);
 
 /// <summary>
 /// 表示数据库连接配置。

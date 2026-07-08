@@ -88,7 +88,7 @@ nose_x, nose_y, right_mouth_x, right_mouth_y, left_mouth_x, left_mouth_y, score
   - `fatigue` 使用红色框和 `FATIGUE WARNING` 标注，`fatigue_normal` 使用绿色 `FATIGUE NORMAL` 标注。
 - `src/core/SafetyDecisionEngine.cs`
   - `face_landmarks_106` / `fatigue_normal` 作为面部基础结果，不直接触发安全告警。
-  - `fatigue` 会作为 CAM_FACE 风险标签参与告警。
+  - `fatigue` 会作为 CAM_FACE 直接告警进入 `SafetyRiskFusion`。单独疲劳为 `Warning`；疲劳与前/后摄像头趋势 `Warning` 同时出现时，综合风险升级为 `Danger`。
 
 ## ONNX Runtime 日志
 

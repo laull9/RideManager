@@ -37,7 +37,7 @@ dotnet tool run dotnet-ef database update
 - `safety_decisions` 1 - N `camera_frames`
 - `safety_decisions` 1 - N `camera_findings`
 - `camera_frames` 1 - N `camera_findings`
-- `safety_decisions` 1 - N `sensor_snapshots`
+- `safety_decisions` 0 - N `sensor_snapshots`；外部 IMU 快照可不关联安全决策
 - `sensor_snapshots` 1 - N `sensor_readings`
 - `safety_decisions` 1 - N `actuator_commands`
 - `devices` 可被 `camera_frames`、`sensor_snapshots`、`actuator_commands` 引用
@@ -107,10 +107,12 @@ dotnet tool run dotnet-ef database update
 | run_session_id | uuid | 关联运行会话，可为空 |
 | risk_level | varchar(32) | `Normal`、`Warning`、`Danger` |
 | decided_at | timestamptz | 决策时间 |
-| payload_json | jsonb | 原始 `SafetyDecision` 负载，包含 `cameraRiskAssessments` 等扩展决策字段 |
+| payload_json | jsonb | 原始 `SafetyDecision` 负载，包含 `cameraRiskAssessments`、`compositeRiskAssessment` 等扩展决策字段 |
 | created_at | timestamptz | 写库时间 |
 
 索引：`decided_at`、`risk_level`、`run_session_id`。
+
+`compositeRiskAssessment` 是当前综合风险融合结果，用于解释最终 `risk_level` 的来源。它包含主导来源 `primarySource`、融合原因 `reasons`，以及前向趋势、后向趋势、面部直接告警等 `contributions`。当前没有新增独立表，前端可先从 `payload_json` 读取解释信息。
 
 ### camera_frames
 
@@ -158,13 +160,13 @@ dotnet tool run dotnet-ef database update
 
 ### sensor_snapshots
 
-传感器快照表。当前雷达和陀螺仪读数接入后统一写入此表。
+传感器快照表。当前雷达读数由 RideManager 主循环写入；GYRO 读数由外部 IMU 服务直接写入此表和 `sensor_readings`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | uuid | 主键 |
-| safety_decision_id | uuid | 关联安全决策 |
-| device_id | uuid | 关联设备，可为空 |
+| safety_decision_id | uuid | 关联安全决策，可为空；外部 IMU 独立写入时可不填 |
+| device_id | uuid | 关联设备，可为空；非空时必须引用 `devices.id` |
 | sensor_name | varchar(64) | 传感器名称，如 `RADAR`、`GYRO` |
 | observed_at | timestamptz | 观测时间 |
 | values_json | jsonb | 原始指标字典 |
@@ -173,13 +175,13 @@ dotnet tool run dotnet-ef database update
 
 ### sensor_readings
 
-传感器指标明细表，便于前端按指标名筛选和画曲线。
+传感器指标明细表，便于前端按指标名筛选和画曲线。App 蓝牙同步会把这些明细作为 `sensorSnapshots[].readings` 一并发送给手机端。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | id | uuid | 主键 |
 | sensor_snapshot_id | uuid | 关联传感器快照 |
-| metric | varchar(64) | 指标名，如 `heart_rate`、`roll` |
+| metric | varchar(64) | 指标名，如 `heart_rate`、`roll`、`acc_x`、`gyro_x` |
 | value | double precision | 指标值 |
 | unit | varchar(32) | 单位，可为空 |
 
@@ -187,7 +189,7 @@ dotnet tool run dotnet-ef database update
 
 ### actuator_commands
 
-执行器命令表，预留给刹车和语音播报模块。后续真实控制器发出命令时写入，请求、完成和失败都更新同一行。
+执行器命令表，预留给刹车和语音播报模块。当前系统语音播报已在进程内直接调用系统播放器，暂不写入本表；后续需要审计执行器命令时，可在请求、完成和失败阶段更新同一行。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|

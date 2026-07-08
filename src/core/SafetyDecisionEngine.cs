@@ -14,16 +14,19 @@ public sealed class SafetyDecisionEngine
     private readonly TimeProvider _timeProvider;
     private readonly IReadOnlyDictionary<CameraId, CameraRiskOptions> _cameraRiskOptions;
     private readonly Dictionary<CameraId, List<CameraRiskSample>> _cameraRiskSamples = new();
+    private readonly SafetyRiskFusion _riskFusion;
 
     /// <summary>
     /// 创建安全决策引擎。
     /// </summary>
     public SafetyDecisionEngine(
         TimeProvider? timeProvider = null,
-        IReadOnlyDictionary<CameraId, CameraRiskOptions>? cameraRiskOptions = null)
+        IReadOnlyDictionary<CameraId, CameraRiskOptions>? cameraRiskOptions = null,
+        SafetyRiskFusion? riskFusion = null)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _cameraRiskOptions = cameraRiskOptions ?? new Dictionary<CameraId, CameraRiskOptions>();
+        _riskFusion = riskFusion ?? new SafetyRiskFusion();
     }
 
     /// <summary>
@@ -37,14 +40,15 @@ public sealed class SafetyDecisionEngine
     {
         var decidedAt = _timeProvider.GetUtcNow();
         var cameraRiskAssessments = BuildCameraRiskAssessments(activeCameraIds, cameraFindings, decidedAt);
-        var riskLevel = DetermineOverallRisk(cameraRiskAssessments, cameraFindings);
+        var compositeRiskAssessment = _riskFusion.Fuse(cameraRiskAssessments, cameraFindings);
 
         return new SafetyDecision(
-            riskLevel,
+            compositeRiskAssessment.RiskLevel,
             decidedAt,
             cameraFindings,
             sensorSnapshots,
             cameraRiskAssessments,
+            compositeRiskAssessment,
             cameraFrames ?? Array.Empty<CameraFrameState>());
     }
 
@@ -84,27 +88,6 @@ public sealed class SafetyDecisionEngine
         }
 
         return assessments;
-    }
-
-    /// <summary>
-    /// 汇总前后摄像头趋势风险，并保留其它摄像头的高置信度告警。
-    /// </summary>
-    private static SafetyRiskLevel DetermineOverallRisk(
-        IReadOnlyList<CameraRiskAssessment> cameraRiskAssessments,
-        IReadOnlyList<CameraFinding> cameraFindings)
-    {
-        if (cameraRiskAssessments.Any(assessment => assessment.RiskLevel == SafetyRiskLevel.Danger))
-        {
-            return SafetyRiskLevel.Danger;
-        }
-
-        if (cameraRiskAssessments.Any(assessment => assessment.RiskLevel == SafetyRiskLevel.Warning)
-            || cameraFindings.Any(finding => !IsTrendCamera(finding.CameraId) && IsNonTrendAlert(finding)))
-        {
-            return SafetyRiskLevel.Warning;
-        }
-
-        return SafetyRiskLevel.Normal;
     }
 
     /// <summary>
@@ -254,25 +237,7 @@ public sealed class SafetyDecisionEngine
     /// </summary>
     private static double GetLabelWeight(string label)
     {
-        return label.Trim().ToLowerInvariant() switch
-        {
-            "lane_line" or "drivable_area" or "face_landmarks_106" or "fatigue_normal" or "fatigue_unknown" => 0.0,
-            "fatigue" => 0.9,
-            "person" => 1.0,
-            "bicycle" or "motorcycle" => 0.95,
-            "car" or "bus" or "truck" or "train" => 0.9,
-            "dog" or "cat" or "horse" or "sheep" or "cow" => 0.75,
-            "traffic light" or "stop sign" => 0.45,
-            _ => 0.35
-        };
-    }
-
-    /// <summary>
-    /// 判断非趋势摄像头 finding 是否代表可直接提示的风险。
-    /// </summary>
-    private static bool IsNonTrendAlert(CameraFinding finding)
-    {
-        return finding.Confidence >= 0.8 && GetLabelWeight(finding.Label) > 0.0;
+        return SafetyRiskFusion.LabelRiskWeight(label);
     }
 
     /// <summary>

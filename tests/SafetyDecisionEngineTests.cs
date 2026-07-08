@@ -93,6 +93,8 @@ public sealed class SafetyDecisionEngineTests
             Array.Empty<SensorSnapshot>());
 
         Assert.Equal(SafetyRiskLevel.Warning, decision.RiskLevel);
+        Assert.Equal(SafetyRiskLevel.Warning, decision.CompositeRiskAssessment.RiskLevel);
+        Assert.Equal("CAM_FACE.direct_alert", decision.CompositeRiskAssessment.PrimarySource);
         Assert.Empty(decision.CameraRiskAssessments);
     }
 
@@ -108,7 +110,61 @@ public sealed class SafetyDecisionEngineTests
             Array.Empty<SensorSnapshot>());
 
         Assert.Equal(SafetyRiskLevel.Normal, decision.RiskLevel);
+        Assert.Equal(SafetyRiskLevel.Normal, decision.CompositeRiskAssessment.RiskLevel);
         Assert.Empty(decision.CameraRiskAssessments);
+    }
+
+    [Fact]
+    public void Decide_WhenFatigueCombinesWithFrontWarning_ReturnsCompositeDanger()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
+        var engine = new SafetyDecisionEngine(timeProvider);
+
+        var decision = engine.Decide(
+            new[] { CameraId.CamFront, CameraId.CamFace },
+            new[]
+            {
+                CreateFinding(CameraId.CamFront, "person", 0.95, timeProvider.GetUtcNow(), 0.55, 0.55),
+                CreateFinding(CameraId.CamFace, "fatigue", 0.92, timeProvider.GetUtcNow())
+            },
+            Array.Empty<SensorSnapshot>());
+
+        Assert.Equal(SafetyRiskLevel.Danger, decision.RiskLevel);
+        Assert.Equal(SafetyRiskLevel.Danger, decision.CompositeRiskAssessment.RiskLevel);
+        Assert.Equal("composite.camera_fusion", decision.CompositeRiskAssessment.PrimarySource);
+        Assert.Contains(
+            decision.CompositeRiskAssessment.Reasons,
+            reason => reason.Contains("fatigue", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            decision.CompositeRiskAssessment.Contributions,
+            contribution => contribution.Source == "CAM_FRONT.trend" && contribution.RiskLevel == SafetyRiskLevel.Warning);
+        Assert.Contains(
+            decision.CompositeRiskAssessment.Contributions,
+            contribution => contribution.Source == "CAM_FACE.direct_alert" && contribution.RiskLevel == SafetyRiskLevel.Warning);
+    }
+
+    [Fact]
+    public void Decide_WhenFrontAndBackAreActive_CompositeIncludesBothTrendChannels()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 6, 1, 10, 0, 0, TimeSpan.Zero));
+        var engine = new SafetyDecisionEngine(timeProvider);
+
+        var decision = engine.Decide(
+            new[] { CameraId.CamFront, CameraId.CamBack },
+            new[]
+            {
+                CreateFinding(CameraId.CamFront, "person", 0.95, timeProvider.GetUtcNow(), 0.55, 0.55),
+                CreateFinding(CameraId.CamBack, "car", 0.75, timeProvider.GetUtcNow(), 0.22, 0.22)
+            },
+            Array.Empty<SensorSnapshot>());
+
+        Assert.Equal(SafetyRiskLevel.Warning, decision.RiskLevel);
+        Assert.Contains(
+            decision.CompositeRiskAssessment.Contributions,
+            contribution => contribution.Source == "CAM_FRONT.trend");
+        Assert.Contains(
+            decision.CompositeRiskAssessment.Contributions,
+            contribution => contribution.Source == "CAM_BACK.trend");
     }
 
     [Fact]

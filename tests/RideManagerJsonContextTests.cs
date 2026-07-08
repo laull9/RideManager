@@ -37,6 +37,11 @@ public sealed class RideManagerJsonContextTests
             new[] { finding },
             new[] { snapshot },
             new[] { new CameraRiskAssessment(CameraId.CamFront, SafetyRiskLevel.Warning, 10.0, 1, 0.8, 0.7, 0.4, 0.3, 0.8, new[] { "vehicle" }) },
+            new CompositeRiskAssessment(
+                SafetyRiskLevel.Warning,
+                "CAM_FRONT.trend",
+                new[] { "front camera trend risk reached warning" },
+                new[] { new CompositeRiskContribution("CAM_FRONT.trend", CameraId.CamFront, SafetyRiskLevel.Warning, 0.8, new[] { "vehicle" }) }),
             new[] { frame });
 
         var decisionJson = JsonSerializer.Serialize(decision, RideManagerJsonContext.Default.SafetyDecision);

@@ -79,4 +79,48 @@ public sealed class ConfigLoaderTests
             File.Delete(configPath);
         }
     }
+
+    [Fact]
+    public void Load_ParsesGyroAndSpeakerOptions()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [sensors.gyro]
+            enabled = true
+            transport = "serial"
+            address = "/dev/ttyUSB0"
+            baud_rate = 230400
+            read_timeout_seconds = 0.35
+
+            [actuators.speaker]
+            enabled = true
+            asset_directory = "assests"
+            warning_file = "slow_down.wav"
+            danger_file = "brake_now.wav"
+            player_command = "/usr/bin/aplay"
+            min_interval_seconds = 1.5
+            """);
+
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+
+            Assert.True(config.Sensors.Gyro.Enabled);
+            Assert.Equal("/dev/ttyUSB0", config.Sensors.Gyro.Address);
+            Assert.Equal(230400, config.Sensors.Gyro.BaudRate);
+            Assert.Equal(0.35, config.Sensors.Gyro.ReadTimeoutSeconds, 6);
+            Assert.True(config.Actuators.Speaker.Enabled);
+            Assert.Equal("assests", config.Actuators.Speaker.AssetDirectory);
+            Assert.Equal("slow_down.wav", config.Actuators.Speaker.WarningFile);
+            Assert.Equal("brake_now.wav", config.Actuators.Speaker.DangerFile);
+            Assert.Equal("/usr/bin/aplay", config.Actuators.Speaker.PlayerCommand);
+            Assert.Equal(1.5, config.Actuators.Speaker.MinIntervalSeconds, 6);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
 }
