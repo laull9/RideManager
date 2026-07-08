@@ -32,6 +32,21 @@ public sealed record CameraOptions(
     string PixelFormat = "MJPG")
 {
     /// <summary>
+    /// 获取摄像头驱动协商使用的采集宽度；0 表示复用 Width。
+    /// </summary>
+    public int CaptureWidth { get; init; }
+
+    /// <summary>
+    /// 获取摄像头驱动协商使用的采集高度；0 表示复用 Height。
+    /// </summary>
+    public int CaptureHeight { get; init; }
+
+    /// <summary>
+    /// 获取摄像头驱动协商使用的采集帧率；0 表示复用 Fps。
+    /// </summary>
+    public int CaptureFps { get; init; }
+
+    /// <summary>
     /// 获取当前摄像头要运行的模型列表；为空时使用旧版单模型字段。
     /// </summary>
     public IReadOnlyList<CameraModelOptions> Models { get; init; } = Array.Empty<CameraModelOptions>();
@@ -40,6 +55,21 @@ public sealed record CameraOptions(
     /// 获取当前摄像头参与主控风险决策时使用的算法参数。
     /// </summary>
     public CameraRiskOptions Risk { get; init; } = CameraRiskOptions.ForCamera(Id);
+
+    /// <summary>
+    /// 获取实际请求摄像头驱动输出的宽度。
+    /// </summary>
+    public int EffectiveCaptureWidth => CaptureWidth > 0 ? CaptureWidth : Width;
+
+    /// <summary>
+    /// 获取实际请求摄像头驱动输出的高度。
+    /// </summary>
+    public int EffectiveCaptureHeight => CaptureHeight > 0 ? CaptureHeight : Height;
+
+    /// <summary>
+    /// 获取实际请求摄像头驱动输出的帧率。
+    /// </summary>
+    public int EffectiveCaptureFps => CaptureFps > 0 ? CaptureFps : Fps;
 
     /// <summary>
     /// 获取实际运行的模型列表，兼容旧版单模型配置。

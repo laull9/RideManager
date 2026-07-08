@@ -132,7 +132,9 @@ public sealed class OpenCvCameraSource : ICameraSource
     {
         if (TryParseDeviceIndex(device, out var index))
         {
-            return new VideoCapture(index);
+            return OperatingSystem.IsLinux()
+                ? new VideoCapture(index, VideoCaptureAPIs.V4L2)
+                : new VideoCapture(index);
         }
 
         return new VideoCapture(device);
@@ -153,9 +155,9 @@ public sealed class OpenCvCameraSource : ICameraSource
             capture.Set(VideoCaptureProperties.FourCC, pixelFormat);
         }
 
-        capture.Set(VideoCaptureProperties.FrameWidth, options.Width);
-        capture.Set(VideoCaptureProperties.FrameHeight, options.Height);
-        capture.Set(VideoCaptureProperties.Fps, options.Fps);
+        capture.Set(VideoCaptureProperties.FrameWidth, options.EffectiveCaptureWidth);
+        capture.Set(VideoCaptureProperties.FrameHeight, options.EffectiveCaptureHeight);
+        capture.Set(VideoCaptureProperties.Fps, options.EffectiveCaptureFps);
         capture.Set(VideoCaptureProperties.BufferSize, 1);
     }
 
@@ -175,7 +177,7 @@ public sealed class OpenCvCameraSource : ICameraSource
         var height = capture.Get(VideoCaptureProperties.FrameHeight);
         var fps = capture.Get(VideoCaptureProperties.Fps);
         Console.WriteLine(
-            $"Camera {options.Id} opened device={options.Device} backend={backend} requested_pixel_format={options.PixelFormat} pixel_format={pixelFormat} size={width:F0}x{height:F0} fps={fps:F1}");
+            $"Camera {options.Id} opened device={options.Device} backend={backend} requested_pixel_format={options.PixelFormat} pixel_format={pixelFormat} requested_capture={options.EffectiveCaptureWidth}x{options.EffectiveCaptureHeight}@{options.EffectiveCaptureFps} actual_capture={width:F0}x{height:F0}@{fps:F1} model_input={options.InputWidth}x{options.InputHeight}");
     }
 
     /// <summary>

@@ -311,6 +311,51 @@ public sealed class CameraPipelineFactoryTests
     }
 
     [Fact]
+    public void ConfigLoader_ParsesCameraCaptureControls()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [models]
+            backend = "onnx"
+            directory = "models"
+
+            [[cameras]]
+            id = "CAM_FRONT"
+            enabled = true
+            device = "synthetic"
+            model = "yolo26n.onnx"
+            width = 1280
+            height = 720
+            capture_width = 640
+            capture_height = 360
+            input_width = 640
+            input_height = 640
+            fps = 30
+            capture_fps = 15
+            confidence_threshold = 0.35
+            pixel_format = "MJPG"
+            """);
+        try
+        {
+            var config = ConfigLoader.Load(configPath);
+
+            var camera = Assert.Single(config.Cameras);
+            Assert.Equal(640, camera.CaptureWidth);
+            Assert.Equal(360, camera.CaptureHeight);
+            Assert.Equal(15, camera.CaptureFps);
+            Assert.Equal(640, camera.EffectiveCaptureWidth);
+            Assert.Equal(360, camera.EffectiveCaptureHeight);
+            Assert.Equal(15, camera.EffectiveCaptureFps);
+        }
+        finally
+        {
+            File.Delete(configPath);
+        }
+    }
+
+    [Fact]
     public void ConfigLoader_DefaultsBackCameraFisheyeFovTo180Degrees()
     {
         var configPath = Path.Combine(Path.GetTempPath(), $"ridemanager-config-{Guid.NewGuid():N}.toml");

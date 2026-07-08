@@ -106,6 +106,9 @@ public static class ConfigLoader
             Math.Clamp(primaryThreshold, 0.0, 1.0),
             value.PixelFormat)
         {
+            CaptureWidth = Math.Max(0, value.CaptureWidth),
+            CaptureHeight = Math.Max(0, value.CaptureHeight),
+            CaptureFps = Math.Max(0, value.CaptureFps),
             Models = modelOptions,
             Risk = ParseCameraRisk(cameraId, value)
         };
@@ -351,6 +354,12 @@ public static class ConfigLoader
         public int InputHeight { get; set; } = 640;
 
         public int Fps { get; set; } = 30;
+
+        public int CaptureWidth { get; set; }
+
+        public int CaptureHeight { get; set; }
+
+        public int CaptureFps { get; set; }
 
         public double ConfidenceThreshold { get; set; } = 0.25;
 
