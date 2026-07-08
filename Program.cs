@@ -67,7 +67,10 @@ try
             ParseDuration(ReadOption(args, "--duration")),
             args.Contains("--headless", StringComparer.OrdinalIgnoreCase));
 
-        await new CameraLiveTester(cameraPipelines, CreateCameraRiskMap(options.Cameras)).RunAsync(liveOptions, shutdown.Token);
+        await new CameraLiveTester(
+            cameraPipelines,
+            CreateCameraRiskMap(options.Cameras),
+            new SystemSpeakerNotifier(options.Actuators.Speaker)).RunAsync(liveOptions, shutdown.Token);
         return;
     }
 

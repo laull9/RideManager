@@ -81,7 +81,7 @@ GYRO 数据复用现有 App 蓝牙同步服务，不需要额外 BLE service。�
 
 ## SPEAKER 系统语音播报
 
-当前实现位于 `src/actuators/SystemSpeakerNotifier.cs`，正式运行时由 `RideSupervisor` 在最终风险不是 `Normal` 时调用。它直接使用系统默认扬声器播放预录音频文件，不依赖语音合成。
+当前实现位于 `src/actuators/SystemSpeakerNotifier.cs`，正式运行时由 `RideSupervisor` 在最终风险不是 `Normal` 时调用；摄像头 `livetest` 也会在风险不是 `Normal` 时触发同一套语音播报。它直接使用系统默认扬声器播放预录音频文件，不依赖语音合成。
 
 配置示例：
 

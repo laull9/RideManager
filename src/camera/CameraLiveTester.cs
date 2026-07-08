@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using OpenCvSharp;
+using RideManager.Actuators;
 using RideManager.Core;
 using RideManager.Sensors;
+using RideManager.Utils;
 
 namespace RideManager.Camera;
 
@@ -12,16 +14,19 @@ public sealed class CameraLiveTester
 {
     private readonly IReadOnlyList<CameraPipeline> _pipelines;
     private readonly IReadOnlyDictionary<CameraId, CameraRiskOptions> _cameraRiskOptions;
+    private readonly ISpeakerNotifier _speakerNotifier;
 
     /// <summary>
     /// 创建摄像头 live 测试器。
     /// </summary>
     public CameraLiveTester(
         IReadOnlyList<CameraPipeline> pipelines,
-        IReadOnlyDictionary<CameraId, CameraRiskOptions>? cameraRiskOptions = null)
+        IReadOnlyDictionary<CameraId, CameraRiskOptions>? cameraRiskOptions = null,
+        ISpeakerNotifier? speakerNotifier = null)
     {
         _pipelines = pipelines;
         _cameraRiskOptions = cameraRiskOptions ?? new Dictionary<CameraId, CameraRiskOptions>();
+        _speakerNotifier = speakerNotifier ?? new NoopSpeakerNotifier(new ActuatorEndpointOptions(false));
     }
 
     /// <summary>
@@ -54,6 +59,7 @@ public sealed class CameraLiveTester
                 previewServer,
                 lastConsoleByCamera,
                 _cameraRiskOptions,
+                _speakerNotifier,
                 cancellationToken))
             .ToArray();
         await Task.WhenAll(workers);
@@ -71,6 +77,7 @@ public sealed class CameraLiveTester
         CameraLivePreviewServer? previewServer,
         ConcurrentDictionary<CameraId, DateTimeOffset> lastConsoleByCamera,
         IReadOnlyDictionary<CameraId, CameraRiskOptions> cameraRiskOptions,
+        ISpeakerNotifier speakerNotifier,
         CancellationToken cancellationToken)
     {
         var decisionEngine = new SafetyDecisionEngine(cameraRiskOptions: cameraRiskOptions);
@@ -97,6 +104,12 @@ public sealed class CameraLiveTester
                 result.Findings,
                 Array.Empty<SensorSnapshot>(),
                 new[] { result.ToFrameState() });
+
+            if (decision.RiskLevel != SafetyRiskLevel.Normal)
+            {
+                await speakerNotifier.NotifyAsync(decision, cancellationToken);
+            }
+
             if (options.Headless)
             {
                 var now = DateTimeOffset.UtcNow;
